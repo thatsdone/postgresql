@@ -67,6 +67,7 @@
 #include "utils/ps_status.h"
 #include "utils/tzparser.h"
 #include "utils/xml.h"
+extern char *LargePage;
 
 #ifndef PG_KRB_SRVTAB
 #define PG_KRB_SRVTAB ""
@@ -1225,7 +1226,7 @@ static struct config_int ConfigureNamesInt[] =
 		&ReservedBackends,
 		3, 0, INT_MAX / 4, NULL, NULL
 	},
-
+	
 	{
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
@@ -2459,6 +2460,15 @@ static struct config_string ConfigureNamesString[] =
 		"ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH", NULL, NULL
 	},
 #endif   /* USE_SSL */
+	{
+		{"large_page", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Controls the large_page option."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&LargePage,
+		"none", NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{

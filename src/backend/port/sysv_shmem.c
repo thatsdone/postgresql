@@ -33,7 +33,7 @@
 #include "miscadmin.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
-
+#include "utils/guc.h"
 
 typedef key_t IpcMemoryKey;		/* shared memory key passed to shmget(2) */
 typedef int IpcMemoryId;		/* shared memory ID returned by shmget(2) */
@@ -46,9 +46,10 @@ typedef int IpcMemoryId;		/* shared memory ID returned by shmget(2) */
 #define PG_SHMAT_FLAGS			0
 #endif
 
-
 unsigned long UsedShmemSegID = 0;
 void	   *UsedShmemSegAddr = NULL;
+
+char *LargePage;
 
 static void *InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size);
 static void IpcMemoryDetach(int status, Datum shmaddr);
@@ -74,9 +75,32 @@ InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size)
 {
 	IpcMemoryId shmid;
 	void	   *memAddress;
+	int	    shmflg = IPC_CREAT | IPC_EXCL | IPCProtection;
+#ifdef ENABLE_LARGE_PAGE
+	const char *str = GetConfigOption("large_page");
 
-	shmid = shmget(memKey, size, IPC_CREAT | IPC_EXCL | IPCProtection);
-
+#define HUGEPAGESIZE (4*1024*1024) /* This must be derived from kernel. */
+	
+	if ((strcmp(str, "all") == 0) ||
+		(strcmp(str, "shared_buffers") == 0))
+	{
+		/*
+		 * SHM_HUGETLB is a Linux specific extension.
+		 */
+		shmflg |= SHM_HUGETLB;
+		if (size % (HUGEPAGESIZE) != 0) {
+			/* Round up */
+			size = ((size / HUGEPAGESIZE) + 1) * HUGEPAGESIZE;
+		}
+	}
+	elog(INFO, "Calling shmget() size=%d, key=%08x, flag%08x",
+		 size, memKey, shmflg);
+	errno = 0;
+#endif
+	shmid = shmget(memKey, size, shmflg);
+#ifdef ENABLE_LARGE_PAGE
+	elog(INFO, "shmget() returns shmid = %d, errno = %d", shmid, errno);
+#endif
 	if (shmid < 0)
 	{
 		/*
@@ -141,7 +165,10 @@ InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size)
 
 	/* OK, should be able to attach to the segment */
 	memAddress = shmat(shmid, NULL, PG_SHMAT_FLAGS);
-
+#ifdef ENABLE_LARGE_PAGE
+	elog(INFO, "shmat(id=%d) returns %p errno= %d", shmid,
+	     memAddress, errno);
+#endif	
 	if (memAddress == (void *) -1)
 		elog(FATAL, "shmat(id=%d) failed: %m", shmid);
 

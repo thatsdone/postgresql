@@ -438,6 +438,20 @@ AC_MSG_RESULT([$enable_thread_safety])
 AC_SUBST(enable_thread_safety)
 
 #
+# Enable Large Page Support
+#
+AC_MSG_CHECKING([whether to enable large page support])
+PGAC_ARG_BOOL(enable, large-page, no,
+              [  --enable-large-page enable large page support],
+[AC_DEFINE([ENABLE_LARGE_PAGE], 1,
+   [Define to 1 to enable Large Page support. (--enable-large-page)])])
+AC_MSG_RESULT([$enable_large_page])
+AC_SUBST(enable_large_page)
+if test "$enable_large_page" = "yes"; then
+AC_CHECK_DECLS(SHM_HUGETLB, [],
+[AC_MSG_ERROR([SHM_HUGETLB is not supported on this platform.])], [#include <sys/shm.h>])
+fi
+#
 # Optionally build Tcl modules (PL/Tcl)
 #
 AC_MSG_CHECKING([whether to build with Tcl])

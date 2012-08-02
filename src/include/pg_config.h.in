@@ -36,6 +36,9 @@
 /* Define to the default TCP port number as a string constant. */
 #undef DEF_PGPORT_STR
 
+/* Define to 1 to enable Large Page support. (--enable-large-page) */
+#undef ENABLE_LARGE_PAGE
+
 /* Define to 1 to enable DTrace support. (--enable-dtrace) */
 #undef ENABLE_DTRACE
 

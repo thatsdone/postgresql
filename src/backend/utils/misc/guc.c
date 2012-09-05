@@ -144,6 +144,7 @@ extern bool trace_syncscan;
 #ifdef DEBUG_BOUNDED_SORT
 extern bool optimize_bounded_sort;
 #endif
+extern char *LargePage;
 
 static int	GUC_check_errcode_value;
 
@@ -3072,6 +3073,15 @@ static struct config_string ConfigureNamesString[] =
 		&application_name,
 		"",
 		check_application_name, assign_application_name, NULL
+	},
+	{
+		{"large_page", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Controls the large_page option."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&LargePage,
+		"none", NULL, NULL
 	},
 
 	/* End-of-list marker */

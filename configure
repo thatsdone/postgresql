@@ -725,6 +725,7 @@ krb_srvtab
 with_python
 with_perl
 with_tcl
+enable_large_page
 enable_thread_safety
 INCLUDES
 autodepend
@@ -823,6 +824,7 @@ with_CC
 enable_depend
 enable_cassert
 enable_thread_safety
+enable_largepage
 with_tcl
 with_tclconfig
 with_perl
@@ -1498,6 +1500,7 @@ Optional Features:
   --enable-depend         turn on automatic dependency tracking
   --enable-cassert        enable assertion checks (for debugging)
   --disable-thread-safety disable thread-safety in client libraries
+  --enable-largepage      enable large page support
   --disable-largefile     omit support for large files
   --disable-float4-byval  disable float4 passed by value
   --disable-float8-byval  disable float8 passed by value
@@ -5164,6 +5167,117 @@ fi
 $as_echo "$enable_thread_safety" >&6; }
 
 
+#
+# Enable Large Page Support
+#
+{ $as_echo "$as_me:$LINENO: checking whether to enable large page support" >&5
+$as_echo_n "checking whether to enable large page support... " >&6; }
+
+
+# Check whether --enable-largepage was given.
+if test "${enable_largepage+set}" = set; then
+  enableval=$enable_largepage;
+  case $enableval in
+    yes)
+
+cat >>confdefs.h <<\_ACEOF
+#define ENABLE_LARGE_PAGE 1
+_ACEOF
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      { { $as_echo "$as_me:$LINENO: error: no argument expected for --enable-largepage option" >&5
+$as_echo "$as_me: error: no argument expected for --enable-largepage option" >&2;}
+   { (exit 1); exit 1; }; }
+      ;;
+  esac
+
+else
+  enable_largepage=no
+
+fi
+
+
+{ $as_echo "$as_me:$LINENO: result: $enable_large_page" >&5
+$as_echo "$enable_large_page" >&6; }
+
+if test "$enable_large_page" = "yes"; then
+{ $as_echo "$as_me:$LINENO: checking whether SHM_HUGETLB is declared" >&5
+$as_echo_n "checking whether SHM_HUGETLB is declared... " >&6; }
+if test "${ac_cv_have_decl_SHM_HUGETLB+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <sys/shm.h>
+
+int
+main ()
+{
+#ifndef SHM_HUGETLB
+  (void) SHM_HUGETLB;
+#endif
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval ac_try_echo="\"\$as_me:$LINENO: $ac_try_echo\""
+$as_echo "$ac_try_echo") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_have_decl_SHM_HUGETLB=yes
+else
+  $as_echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_have_decl_SHM_HUGETLB=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_have_decl_SHM_HUGETLB" >&5
+$as_echo "$ac_cv_have_decl_SHM_HUGETLB" >&6; }
+if test "x$ac_cv_have_decl_SHM_HUGETLB" = x""yes; then
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_SHM_HUGETLB 1
+_ACEOF
+
+
+else
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_SHM_HUGETLB 0
+_ACEOF
+
+{ { $as_echo "$as_me:$LINENO: error: SHM_HUGETLB is not supported on this platform." >&5
+$as_echo "$as_me: error: SHM_HUGETLB is not supported on this platform." >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+
+fi
 #
 # Optionally build Tcl modules (PL/Tcl)
 #

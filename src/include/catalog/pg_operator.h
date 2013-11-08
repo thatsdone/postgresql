@@ -5,7 +5,7 @@
  *	  along with the relation's initial contents.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_operator.h
@@ -527,6 +527,7 @@ DATA(insert OID = 671 (  "<>"	   PGNSP PGUID b f f	701  701	16 671 670 float8ne 
 DESCR("not equal");
 DATA(insert OID = 672 (  "<"	   PGNSP PGUID b f f	701  701	16 674 675 float8lt scalarltsel scalarltjoinsel ));
 DESCR("less than");
+#define Float8LessOperator	672
 DATA(insert OID = 673 (  "<="	   PGNSP PGUID b f f	701  701	16 675 674 float8le scalarltsel scalarltjoinsel ));
 DESCR("less than or equal");
 DATA(insert OID = 674 (  ">"	   PGNSP PGUID b f f	701  701	16 672 673 float8gt scalargtsel scalargtjoinsel ));
@@ -1671,6 +1672,20 @@ DESCR("less than or equal");
 DATA(insert OID = 2993 (  ">="	   PGNSP PGUID b f f 2249 2249 16 2992 2990 record_ge scalargtsel scalargtjoinsel ));
 DESCR("greater than or equal");
 
+/* byte-oriented tests for identical rows and fast sorting */
+DATA(insert OID = 3188 (  "*="	   PGNSP PGUID b t f 2249 2249 16 3188 3189 record_image_eq eqsel eqjoinsel ));
+DESCR("identical");
+DATA(insert OID = 3189 (  "*<>"   PGNSP PGUID b f f 2249 2249 16 3189 3188 record_image_ne neqsel neqjoinsel ));
+DESCR("not identical");
+DATA(insert OID = 3190 (  "*<"	   PGNSP PGUID b f f 2249 2249 16 3191 3193 record_image_lt scalarltsel scalarltjoinsel ));
+DESCR("less than");
+DATA(insert OID = 3191 (  "*>"	   PGNSP PGUID b f f 2249 2249 16 3190 3192 record_image_gt scalargtsel scalargtjoinsel ));
+DESCR("greater than");
+DATA(insert OID = 3192 (  "*<="   PGNSP PGUID b f f 2249 2249 16 3193 3191 record_image_le scalarltsel scalarltjoinsel ));
+DESCR("less than or equal");
+DATA(insert OID = 3193 (  "*>="   PGNSP PGUID b f f 2249 2249 16 3192 3190 record_image_ge scalargtsel scalargtjoinsel ));
+DESCR("greater than or equal");
+
 /* generic range type operators */
 DATA(insert OID = 3882 (  "="	   PGNSP PGUID b t t 3831 3831 16 3882 3883 range_eq eqsel eqjoinsel ));
 DESCR("equal");
@@ -1723,12 +1738,25 @@ DATA(insert OID = 3899 (  "-"	   PGNSP PGUID b f f 3831 3831 3831 0 0 range_minu
 DESCR("range difference");
 DATA(insert OID = 3900 (  "*"	   PGNSP PGUID b f f 3831 3831 3831 3900 0 range_intersect - - ));
 DESCR("range intersection");
+DATA(insert OID = 3962 (  "->"	   PGNSP PGUID b f f 114 25 114 0 0 json_object_field - - ));
+DESCR("get json object field");
+DATA(insert OID = 3963 (  "->>"    PGNSP PGUID b f f 114 25 25 0 0 json_object_field_text - - ));
+DESCR("get json object field as text");
+DATA(insert OID = 3964 (  "->"	   PGNSP PGUID b f f 114 23 114 0 0 json_array_element - - ));
+DESCR("get json array element");
+DATA(insert OID = 3965 (  "->>"    PGNSP PGUID b f f 114 23 25 0 0 json_array_element_text - - ));
+DESCR("get json array element as text");
+DATA(insert OID = 3966 (  "#>"	   PGNSP PGUID b f f 114 1009 114 0 0 json_extract_path_op - - ));
+DESCR("get value from json with path elements");
+DATA(insert OID = 3967 (  "#>>"    PGNSP PGUID b f f 114 1009 25 0 0 json_extract_path_text_op - - ));
+DESCR("get value from json as text with path elements");
+
 
 
 /*
  * function prototypes
  */
-extern void OperatorCreate(const char *operatorName,
+extern Oid OperatorCreate(const char *operatorName,
 			   Oid operatorNamespace,
 			   Oid leftTypeId,
 			   Oid rightTypeId,

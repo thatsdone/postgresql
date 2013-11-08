@@ -3,11 +3,11 @@
  *
  *	utility functions
  *
- *	Copyright (c) 2010-2012, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2013, PostgreSQL Global Development Group
  *	contrib/pg_upgrade/util.c
  */
 
-#include "postgres.h"
+#include "postgres_fe.h"
 
 #include "pg_upgrade.h"
 
@@ -32,6 +32,18 @@ report_status(eLogType type, const char *fmt,...)
 	va_end(args);
 
 	pg_log(type, "%s\n", message);
+}
+
+
+/* force blank output for progress display */
+void
+end_progress_output(void)
+{
+	/*
+	 * In case nothing printed; pass a space so gcc doesn't complain about
+	 * empty format string.
+	 */
+	prep_status(" ");
 }
 
 
@@ -63,36 +75,30 @@ prep_status(const char *fmt,...)
 	if (strlen(message) > 0 && message[strlen(message) - 1] == '\n')
 		pg_log(PG_REPORT, "%s", message);
 	else
-		pg_log(PG_REPORT, "%-" MESSAGE_WIDTH "s", message);
+		/* trim strings that don't end in a newline */
+		pg_log(PG_REPORT, "%-*s", MESSAGE_WIDTH, message);
 }
 
 
+static
+ __attribute__((format(PG_PRINTF_ATTRIBUTE, 2, 0)))
 void
-pg_log(eLogType type, char *fmt,...)
+pg_log_v(eLogType type, const char *fmt, va_list ap)
 {
-	va_list		args;
 	char		message[MAX_STRING];
 
-	va_start(args, fmt);
-	vsnprintf(message, sizeof(message), fmt, args);
-	va_end(args);
+	vsnprintf(message, sizeof(message), fmt, ap);
 
-	/* PG_VERBOSE is only output in verbose mode */
+	/* PG_VERBOSE and PG_STATUS are only output in verbose mode */
 	/* fopen() on log_opts.internal might have failed, so check it */
-	if ((type != PG_VERBOSE || log_opts.verbose) && log_opts.internal != NULL)
+	if (((type != PG_VERBOSE && type != PG_STATUS) || log_opts.verbose) &&
+		log_opts.internal != NULL)
 	{
-		/*
-		 * There's nothing much we can do about it if fwrite fails, but some
-		 * platforms declare fwrite with warn_unused_result.  Do a little
-		 * dance with casting to void to shut up the compiler in such cases.
-		 */
-		size_t		rc;
-
-		rc = fwrite(message, strlen(message), 1, log_opts.internal);
-		/* if we are using OVERWRITE_MESSAGE, add newline to log file */
-		if (strchr(message, '\r') != NULL)
-			rc = fwrite("\n", 1, 1, log_opts.internal);
-		(void) rc;
+		if (type == PG_STATUS)
+			/* status messages need two leading spaces and a newline */
+			fprintf(log_opts.internal, "  %s\n", message);
+		else
+			fprintf(log_opts.internal, "%s", message);
 		fflush(log_opts.internal);
 	}
 
@@ -103,6 +109,21 @@ pg_log(eLogType type, char *fmt,...)
 				printf("%s", _(message));
 			break;
 
+		case PG_STATUS:
+			/* for output to a display, do leading truncation and append \r */
+			if (isatty(fileno(stdout)))
+				/* -2 because we use a 2-space indent */
+				printf("  %s%-*.*s\r",
+				/* prefix with "..." if we do leading truncation */
+					   strlen(message) <= MESSAGE_WIDTH - 2 ? "" : "...",
+					   MESSAGE_WIDTH - 2, MESSAGE_WIDTH - 2,
+				/* optional leading truncation */
+					   strlen(message) <= MESSAGE_WIDTH - 2 ? message :
+					   message + strlen(message) - MESSAGE_WIDTH + 3 + 2);
+			else
+				printf("  %s\n", _(message));
+			break;
+
 		case PG_REPORT:
 		case PG_WARNING:
 			printf("%s", _(message));
@@ -110,14 +131,36 @@ pg_log(eLogType type, char *fmt,...)
 
 		case PG_FATAL:
 			printf("\n%s", _(message));
-			printf("Failure, exiting\n");
-			exit(1);
 			break;
 
 		default:
 			break;
 	}
 	fflush(stdout);
+}
+
+
+void
+pg_log(eLogType type, const char *fmt,...)
+{
+	va_list		args;
+
+	va_start(args, fmt);
+	pg_log_v(type, fmt, args);
+	va_end(args);
+}
+
+
+void
+pg_fatal(const char *fmt,...)
+{
+	va_list		args;
+
+	va_start(args, fmt);
+	pg_log_v(PG_FATAL, fmt, args);
+	va_end(args);
+	printf("Failure, exiting\n");
+	exit(1);
 }
 
 
@@ -191,49 +234,6 @@ get_user_info(char **user_name)
 }
 
 
-void *
-pg_malloc(size_t n)
-{
-	void	   *p = malloc(n);
-
-	if (p == NULL)
-		pg_log(PG_FATAL, "%s: out of memory\n", os_info.progname);
-
-	return p;
-}
-
-void *
-pg_realloc(void *ptr, size_t n)
-{
-	void	   *p = realloc(ptr, n);
-
-	if (p == NULL)
-		pg_log(PG_FATAL, "%s: out of memory\n", os_info.progname);
-
-	return p;
-}
-
-
-void
-pg_free(void *p)
-{
-	if (p != NULL)
-		free(p);
-}
-
-
-char *
-pg_strdup(const char *s)
-{
-	char	   *result = strdup(s);
-
-	if (result == NULL)
-		pg_log(PG_FATAL, "%s: out of memory\n", os_info.progname);
-
-	return result;
-}
-
-
 /*
  * getErrorText()
  *
@@ -276,10 +276,9 @@ pg_putenv(const char *var, const char *val)
 	if (val)
 	{
 #ifndef WIN32
-		char	   *envstr = (char *) pg_malloc(strlen(var) +
-												strlen(val) + 2);
+		char	   *envstr;
 
-		sprintf(envstr, "%s=%s", var, val);
+		envstr = psprintf("%s=%s", var, val);
 		putenv(envstr);
 
 		/*

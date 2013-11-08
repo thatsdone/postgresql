@@ -46,6 +46,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="PARAMETER">column_name</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
     ADD <replaceable class="PARAMETER">table_constraint</replaceable> [ NOT VALID ]
     ADD <replaceable class="PARAMETER">table_constraint_using_index</replaceable>
+    ALTER CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
     VALIDATE CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable>
     DROP CONSTRAINT [ IF EXISTS ]  <replaceable class="PARAMETER">constraint_name</replaceable> [ RESTRICT | CASCADE ]
     DISABLE TRIGGER [ <replaceable class="PARAMETER">trigger_name</replaceable> | ALL | USER ]
@@ -147,11 +148,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
     <listitem>
      <para>
       These forms set or remove the default value for a column.
-      The default values only apply to subsequent <command>INSERT</command>
-      commands; they do not cause rows already in the table to change.
-      Defaults can also be created for views, in which case they are
-      inserted into <command>INSERT</> statements on the view before
-      the view's <literal>ON INSERT</literal> rule is applied.
+      Default values only apply in subsequent <command>INSERT</command>
+      or <command>UPDATE</> commands; they do not cause rows already in the
+      table to change.
      </para>
     </listitem>
    </varlistentry>
@@ -319,6 +318,16 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
    </varlistentry>
 
    <varlistentry>
+    <term><literal>ALTER CONSTRAINT</literal></term>
+    <listitem>
+     <para>
+      This form alters the attributes of a constraint that was previously
+      created. Currently only foreign key constraints may be altered.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>VALIDATE CONSTRAINT</literal></term>
     <listitem>
      <para>
@@ -326,9 +335,13 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
       as <literal>NOT VALID</literal>, by scanning the table to ensure there
       are no rows for which the constraint is not satisfied.
       Nothing happens if the constraint is already marked valid.
-      The value of separating validation from initial creation of the
-      constraint is that validation requires a lesser lock on the table
-      than constraint creation does.
+     </para>
+     <para>
+      Validation can be a long process on larger tables and currently requires
+      an <literal>ACCESS EXCLUSIVE</literal> lock.  The value of separating
+      validation from initial creation is that you can defer validation to less
+      busy times, or can be used to give additional time to correct pre-existing
+      errors while preventing new errors.
      </para>
     </listitem>
    </varlistentry>
@@ -625,10 +638,12 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
       <term><replaceable class="PARAMETER">name</replaceable></term>
       <listitem>
        <para>
-        The name (possibly schema-qualified) of an existing table to
-        alter. If <literal>ONLY</> is specified, only that table is
-        altered. If <literal>ONLY</> is not specified, the table and any
-        descendant tables are altered.
+        The name (optionally schema-qualified) of an existing table to
+        alter. If <literal>ONLY</> is specified before the table name, only
+        that table is altered. If <literal>ONLY</> is not specified, the table
+        and all its descendant tables (if any) are altered.  Optionally,
+        <literal>*</> can be specified after the table name to explicitly
+        indicate that descendant tables are included.
        </para>
       </listitem>
      </varlistentry>
@@ -1026,7 +1041,7 @@ ALTER TABLE distributors DROP CONSTRAINT zipchk;
   </para>
 
   <para>
-   To remove a check constraint from a table only:
+   To remove a check constraint from one table only:
 <programlisting>
 ALTER TABLE ONLY distributors DROP CONSTRAINT zipchk;
 </programlisting>

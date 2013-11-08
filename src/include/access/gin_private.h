@@ -2,7 +2,7 @@
  * gin_private.h
  *	  header file for postgres inverted index access method implementation.
  *
- *	Copyright (c) 2006-2012, PostgreSQL Global Development Group
+ *	Copyright (c) 2006-2013, PostgreSQL Global Development Group
  *
  *	src/include/access/gin_private.h
  *--------------------------------------------------------------------------
@@ -232,10 +232,14 @@ typedef signed char GinNullCategory;
 #define GinDataPageGetRightBound(page)	((ItemPointer) PageGetContents(page))
 #define GinDataPageGetData(page)	\
 	(PageGetContents(page) + MAXALIGN(sizeof(ItemPointerData)))
+/* non-leaf pages contain PostingItems */
+#define GinDataPageGetPostingItem(page, i)	\
+	((PostingItem *) (GinDataPageGetData(page) + ((i)-1) * sizeof(PostingItem)))
+/* leaf pages contain ItemPointers */
+#define GinDataPageGetItemPointer(page, i)	\
+	((ItemPointer) (GinDataPageGetData(page) + ((i)-1) * sizeof(ItemPointerData)))
 #define GinSizeOfDataPageItem(page) \
 	(GinPageIsLeaf(page) ? sizeof(ItemPointerData) : sizeof(PostingItem))
-#define GinDataPageGetItem(page,i)	\
-	(GinDataPageGetData(page) + ((i)-1) * GinSizeOfDataPageItem(page))
 
 #define GinDataPageGetFreeSpace(page)	\
 	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
@@ -530,12 +534,12 @@ extern void ginEntryFillRoot(GinBtree btree, Buffer root, Buffer lbuf, Buffer rb
 extern IndexTuple ginPageGetLinkItup(Buffer buf);
 
 /* gindatapage.c */
-extern int	ginCompareItemPointers(ItemPointer a, ItemPointer b);
 extern uint32 ginMergeItemPointers(ItemPointerData *dst,
 					 ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb);
 
-extern void GinDataPageAddItem(Page page, void *data, OffsetNumber offset);
+extern void GinDataPageAddItemPointer(Page page, ItemPointer data, OffsetNumber offset);
+extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 
 typedef struct
@@ -723,5 +727,29 @@ extern void ginHeapTupleFastCollect(GinState *ginstate,
 						ItemPointer ht_ctid);
 extern void ginInsertCleanup(GinState *ginstate,
 				 bool vac_delay, IndexBulkDeleteResult *stats);
+
+/*
+ * Merging the results of several gin scans compares item pointers a lot,
+ * so we want this to be inlined. But if the compiler doesn't support that,
+ * fall back on the non-inline version from itemptr.c. See STATIC_IF_INLINE in
+ * c.h.
+ */
+#ifdef PG_USE_INLINE
+static inline int
+ginCompareItemPointers(ItemPointer a, ItemPointer b)
+{
+	uint64 ia = (uint64) a->ip_blkid.bi_hi << 32 | (uint64) a->ip_blkid.bi_lo << 16 | a->ip_posid;
+	uint64 ib = (uint64) b->ip_blkid.bi_hi << 32 | (uint64) b->ip_blkid.bi_lo << 16 | b->ip_posid;
+
+	if (ia == ib)
+		return 0;
+	else if (ia > ib)
+		return 1;
+	else
+		return -1;
+}
+#else
+#define ginCompareItemPointers(a, b) ItemPointerCompare(a, b)
+#endif   /* PG_USE_INLINE */
 
 #endif   /* GIN_PRIVATE_H */

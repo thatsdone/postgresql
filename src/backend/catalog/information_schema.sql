@@ -2,7 +2,7 @@
  * SQL Information Schema
  * as defined in ISO/IEC 9075-11:2011
  *
- * Copyright (c) 2003-2012, PostgreSQL Global Development Group
+ * Copyright (c) 2003-2013, PostgreSQL Global Development Group
  *
  * src/backend/catalog/information_schema.sql
  */
@@ -730,10 +730,9 @@ CREATE VIEW columns AS
            CAST('NEVER' AS character_data) AS is_generated,
            CAST(null AS character_data) AS generation_expression,
 
-           CAST(CASE WHEN c.relkind = 'r'
-                          OR (c.relkind = 'v'
-                              AND EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '2' AND is_instead)
-                              AND EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '4' AND is_instead))
+           CAST(CASE WHEN c.relkind = 'r' OR
+                          (c.relkind IN ('v', 'f') AND
+                           pg_column_is_updatable(c.oid, a.attnum, false))
                 THEN 'YES' ELSE 'NO' END AS yes_or_no) AS is_updatable
 
     FROM (pg_attribute a LEFT JOIN pg_attrdef ad ON attrelid = adrelid AND attnum = adnum)
@@ -1503,7 +1502,9 @@ CREATE VIEW schemata AS
            CAST(null AS sql_identifier) AS default_character_set_name,
            CAST(null AS character_data) AS sql_path
     FROM pg_namespace n, pg_authid u
-    WHERE n.nspowner = u.oid AND pg_has_role(n.nspowner, 'USAGE');
+    WHERE n.nspowner = u.oid
+          AND (pg_has_role(n.nspowner, 'USAGE')
+               OR has_schema_privilege(n.oid, 'CREATE, USAGE'));
 
 GRANT SELECT ON schemata TO PUBLIC;
 
@@ -1896,9 +1897,10 @@ CREATE VIEW tables AS
            CAST(nt.nspname AS sql_identifier) AS user_defined_type_schema,
            CAST(t.typname AS sql_identifier) AS user_defined_type_name,
 
-           CAST(CASE WHEN c.relkind = 'r'
-                          OR (c.relkind = 'v'
-                              AND EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '3' AND is_instead))
+           CAST(CASE WHEN c.relkind = 'r' OR
+                          (c.relkind IN ('v', 'f') AND
+                           -- 1 << CMD_INSERT
+                           pg_relation_is_updatable(c.oid, false) & 8 = 8)
                 THEN 'YES' ELSE 'NO' END AS yes_or_no) AS is_insertable_into,
 
            CAST(CASE WHEN t.typname IS NOT NULL THEN 'YES' ELSE 'NO' END AS yes_or_no) AS is_typed,
@@ -2494,16 +2496,23 @@ CREATE VIEW views AS
                   ELSE null END
              AS character_data) AS view_definition,
 
-           CAST('NONE' AS character_data) AS check_option,
+           CAST(
+             CASE WHEN 'check_option=cascaded' = ANY (c.reloptions)
+                  THEN 'CASCADED'
+                  WHEN 'check_option=local' = ANY (c.reloptions)
+                  THEN 'LOCAL'
+                  ELSE 'NONE' END
+             AS character_data) AS check_option,
 
            CAST(
-             CASE WHEN EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '2' AND is_instead)
-                   AND EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '4' AND is_instead)
+             -- (1 << CMD_UPDATE) + (1 << CMD_DELETE)
+             CASE WHEN pg_relation_is_updatable(c.oid, false) & 20 = 20
                   THEN 'YES' ELSE 'NO' END
              AS yes_or_no) AS is_updatable,
 
            CAST(
-             CASE WHEN EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class = c.oid AND ev_type = '3' AND is_instead)
+             -- 1 << CMD_INSERT
+             CASE WHEN pg_relation_is_updatable(c.oid, false) & 8 = 8
                   THEN 'YES' ELSE 'NO' END
              AS yes_or_no) AS is_insertable_into,
 

@@ -21,8 +21,9 @@
  *
  * Replication is either synchronous or not synchronous (async). If it is
  * async, we just fastpath out of here. If it is sync, then we wait for
- * the write or flush location on the standby before releasing the waiting backend.
- * Further complexity in that interaction is expected in later releases.
+ * the write or flush location on the standby before releasing the waiting
+ * backend. Further complexity in that interaction is expected in later
+ * releases.
  *
  * The best performing way to manage the waiting backends is to have a
  * single ordered queue of waiting backends, so that we can avoid
@@ -34,7 +35,7 @@
  * take some time. Once caught up, the current highest priority standby
  * will release waiters from the queue.
  *
- * Portions Copyright (c) 2010-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2013, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/syncrep.c
@@ -116,11 +117,11 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 	 * set.  See SyncRepUpdateSyncStandbysDefined.
 	 *
 	 * Also check that the standby hasn't already replied. Unlikely race
-	 * condition but we'll be fetching that cache line anyway so its likely to
+	 * condition but we'll be fetching that cache line anyway so it's likely to
 	 * be a low cost check.
 	 */
 	if (!WalSndCtl->sync_standbys_defined ||
-		XLByteLE(XactCommitLSN, WalSndCtl->lsn[mode]))
+		XactCommitLSN <= WalSndCtl->lsn[mode])
 	{
 		LWLockRelease(SyncRepLock);
 		return;
@@ -287,7 +288,7 @@ SyncRepQueueInsert(int mode)
 		 * Stop at the queue element that we should after to ensure the queue
 		 * is ordered by LSN.
 		 */
-		if (XLByteLT(proc->waitLSN, MyProc->waitLSN))
+		if (proc->waitLSN < MyProc->waitLSN)
 			break;
 
 		proc = (PGPROC *) SHMQueuePrev(&(WalSndCtl->SyncRepQueue[mode]),
@@ -428,12 +429,12 @@ SyncRepReleaseWaiters(void)
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
 	 */
-	if (XLByteLT(walsndctl->lsn[SYNC_REP_WAIT_WRITE], MyWalSnd->write))
+	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < MyWalSnd->write)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = MyWalSnd->write;
 		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
 	}
-	if (XLByteLT(walsndctl->lsn[SYNC_REP_WAIT_FLUSH], MyWalSnd->flush))
+	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < MyWalSnd->flush)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
@@ -443,7 +444,7 @@ SyncRepReleaseWaiters(void)
 
 	elog(DEBUG3, "released %d procs up to write %X/%X, %d procs up to flush %X/%X",
 		 numwrite, (uint32) (MyWalSnd->write >> 32), (uint32) MyWalSnd->write,
-		 numflush, (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
+	   numflush, (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
 
 	/*
 	 * If we are managing the highest priority standby, though we weren't
@@ -543,7 +544,7 @@ SyncRepWakeQueue(bool all, int mode)
 		/*
 		 * Assume the queue is ordered by LSN
 		 */
-		if (!all && XLByteLT(walsndctl->lsn[mode], proc->waitLSN))
+		if (!all && walsndctl->lsn[mode] < proc->waitLSN)
 			return numprocs;
 
 		/*
@@ -640,7 +641,7 @@ SyncRepQueueIsOrderedByLSN(int mode)
 		 * Check the queue is ordered by LSN and that multiple procs don't
 		 * have matching LSNs
 		 */
-		if (XLByteLE(proc->waitLSN, lastLSN))
+		if (proc->waitLSN <= lastLSN)
 			return false;
 
 		lastLSN = proc->waitLSN;

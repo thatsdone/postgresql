@@ -11,7 +11,7 @@
  * be handled easily in a simple depth-first traversal.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -178,7 +178,9 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(resultRelations);
 	COPY_SCALAR_FIELD(resultRelIndex);
 	COPY_NODE_FIELD(plans);
+	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
+	COPY_NODE_FIELD(fdwPrivLists);
 	COPY_NODE_FIELD(rowMarks);
 	COPY_SCALAR_FIELD(epqParam);
 
@@ -507,6 +509,7 @@ _copyFunctionScan(const FunctionScan *from)
 	COPY_NODE_FIELD(funccoltypes);
 	COPY_NODE_FIELD(funccoltypmods);
 	COPY_NODE_FIELD(funccolcollations);
+	COPY_SCALAR_FIELD(funcordinality);
 
 	return newnode;
 }
@@ -1031,6 +1034,7 @@ _copyIntoClause(const IntoClause *from)
 	COPY_NODE_FIELD(options);
 	COPY_SCALAR_FIELD(onCommit);
 	COPY_STRING_FIELD(tableSpaceName);
+	COPY_NODE_FIELD(viewQuery);
 	COPY_SCALAR_FIELD(skipData);
 
 	return newnode;
@@ -1135,7 +1139,9 @@ _copyAggref(const Aggref *from)
 	COPY_NODE_FIELD(args);
 	COPY_NODE_FIELD(aggorder);
 	COPY_NODE_FIELD(aggdistinct);
+	COPY_NODE_FIELD(aggfilter);
 	COPY_SCALAR_FIELD(aggstar);
+	COPY_SCALAR_FIELD(aggvariadic);
 	COPY_SCALAR_FIELD(agglevelsup);
 	COPY_LOCATION_FIELD(location);
 
@@ -1155,6 +1161,7 @@ _copyWindowFunc(const WindowFunc *from)
 	COPY_SCALAR_FIELD(wincollid);
 	COPY_SCALAR_FIELD(inputcollid);
 	COPY_NODE_FIELD(args);
+	COPY_NODE_FIELD(aggfilter);
 	COPY_SCALAR_FIELD(winref);
 	COPY_SCALAR_FIELD(winstar);
 	COPY_SCALAR_FIELD(winagg);
@@ -1194,6 +1201,7 @@ _copyFuncExpr(const FuncExpr *from)
 	COPY_SCALAR_FIELD(funcid);
 	COPY_SCALAR_FIELD(funcresulttype);
 	COPY_SCALAR_FIELD(funcretset);
+	COPY_SCALAR_FIELD(funcvariadic);
 	COPY_SCALAR_FIELD(funcformat);
 	COPY_SCALAR_FIELD(funccollid);
 	COPY_SCALAR_FIELD(inputcollid);
@@ -1914,8 +1922,8 @@ _copyLateralJoinInfo(const LateralJoinInfo *from)
 {
 	LateralJoinInfo *newnode = makeNode(LateralJoinInfo);
 
-	COPY_SCALAR_FIELD(lateral_rhs);
 	COPY_BITMAPSET_FIELD(lateral_lhs);
+	COPY_BITMAPSET_FIELD(lateral_rhs);
 
 	return newnode;
 }
@@ -1949,8 +1957,8 @@ _copyPlaceHolderInfo(const PlaceHolderInfo *from)
 	COPY_SCALAR_FIELD(phid);
 	COPY_NODE_FIELD(ph_var);
 	COPY_BITMAPSET_FIELD(ph_eval_at);
+	COPY_BITMAPSET_FIELD(ph_lateral);
 	COPY_BITMAPSET_FIELD(ph_needed);
-	COPY_BITMAPSET_FIELD(ph_may_need);
 	COPY_SCALAR_FIELD(ph_width);
 
 	return newnode;
@@ -1977,6 +1985,7 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_NODE_FIELD(funccoltypes);
 	COPY_NODE_FIELD(funccoltypmods);
 	COPY_NODE_FIELD(funccolcollations);
+	COPY_SCALAR_FIELD(funcordinality);
 	COPY_NODE_FIELD(values_lists);
 	COPY_NODE_FIELD(values_collations);
 	COPY_STRING_FIELD(ctename);
@@ -1994,6 +2003,18 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_SCALAR_FIELD(checkAsUser);
 	COPY_BITMAPSET_FIELD(selectedCols);
 	COPY_BITMAPSET_FIELD(modifiedCols);
+
+	return newnode;
+}
+
+static WithCheckOption *
+_copyWithCheckOption(const WithCheckOption *from)
+{
+	WithCheckOption *newnode = makeNode(WithCheckOption);
+
+	COPY_STRING_FIELD(viewname);
+	COPY_NODE_FIELD(qual);
+	COPY_SCALAR_FIELD(cascaded);
 
 	return newnode;
 }
@@ -2036,7 +2057,7 @@ _copyRowMarkClause(const RowMarkClause *from)
 	RowMarkClause *newnode = makeNode(RowMarkClause);
 
 	COPY_SCALAR_FIELD(rti);
-	COPY_SCALAR_FIELD(forUpdate);
+	COPY_SCALAR_FIELD(strength);
 	COPY_SCALAR_FIELD(noWait);
 	COPY_SCALAR_FIELD(pushedDown);
 
@@ -2149,6 +2170,7 @@ _copyFuncCall(const FuncCall *from)
 	COPY_NODE_FIELD(funcname);
 	COPY_NODE_FIELD(args);
 	COPY_NODE_FIELD(agg_order);
+	COPY_NODE_FIELD(agg_filter);
 	COPY_SCALAR_FIELD(agg_star);
 	COPY_SCALAR_FIELD(agg_distinct);
 	COPY_SCALAR_FIELD(func_variadic);
@@ -2277,6 +2299,7 @@ _copyRangeFunction(const RangeFunction *from)
 {
 	RangeFunction *newnode = makeNode(RangeFunction);
 
+	COPY_SCALAR_FIELD(ordinality);
 	COPY_SCALAR_FIELD(lateral);
 	COPY_NODE_FIELD(funccallnode);
 	COPY_NODE_FIELD(alias);
@@ -2399,7 +2422,7 @@ _copyLockingClause(const LockingClause *from)
 	LockingClause *newnode = makeNode(LockingClause);
 
 	COPY_NODE_FIELD(lockedRels);
-	COPY_SCALAR_FIELD(forUpdate);
+	COPY_SCALAR_FIELD(strength);
 	COPY_SCALAR_FIELD(noWait);
 
 	return newnode;
@@ -2440,6 +2463,7 @@ _copyQuery(const Query *from)
 	COPY_NODE_FIELD(rtable);
 	COPY_NODE_FIELD(jointree);
 	COPY_NODE_FIELD(targetList);
+	COPY_NODE_FIELD(withCheckOptions);
 	COPY_NODE_FIELD(returningList);
 	COPY_NODE_FIELD(groupClause);
 	COPY_NODE_FIELD(havingQual);
@@ -2702,6 +2726,7 @@ _copyCopyStmt(const CopyStmt *from)
 	COPY_NODE_FIELD(query);
 	COPY_NODE_FIELD(attlist);
 	COPY_SCALAR_FIELD(is_from);
+	COPY_SCALAR_FIELD(is_program);
 	COPY_STRING_FIELD(filename);
 	COPY_NODE_FIELD(options);
 
@@ -2932,7 +2957,6 @@ _copyAlterObjectSchemaStmt(const AlterObjectSchemaStmt *from)
 	COPY_NODE_FIELD(relation);
 	COPY_NODE_FIELD(object);
 	COPY_NODE_FIELD(objarg);
-	COPY_STRING_FIELD(addname);
 	COPY_STRING_FIELD(newschema);
 	COPY_SCALAR_FIELD(missing_ok);
 
@@ -2948,7 +2972,6 @@ _copyAlterOwnerStmt(const AlterOwnerStmt *from)
 	COPY_NODE_FIELD(relation);
 	COPY_NODE_FIELD(object);
 	COPY_NODE_FIELD(objarg);
-	COPY_STRING_FIELD(addname);
 	COPY_STRING_FIELD(newowner);
 
 	return newnode;
@@ -3055,6 +3078,7 @@ _copyAlterEnumStmt(const AlterEnumStmt *from)
 	COPY_STRING_FIELD(newVal);
 	COPY_STRING_FIELD(newValNeighbor);
 	COPY_SCALAR_FIELD(newValIsAfter);
+	COPY_SCALAR_FIELD(skipIfExists);
 
 	return newnode;
 }
@@ -3069,6 +3093,7 @@ _copyViewStmt(const ViewStmt *from)
 	COPY_NODE_FIELD(query);
 	COPY_SCALAR_FIELD(replace);
 	COPY_NODE_FIELD(options);
+	COPY_SCALAR_FIELD(withCheckOption);
 
 	return newnode;
 }
@@ -3227,7 +3252,20 @@ _copyCreateTableAsStmt(const CreateTableAsStmt *from)
 
 	COPY_NODE_FIELD(query);
 	COPY_NODE_FIELD(into);
+	COPY_SCALAR_FIELD(relkind);
 	COPY_SCALAR_FIELD(is_select_into);
+
+	return newnode;
+}
+
+static RefreshMatViewStmt *
+_copyRefreshMatViewStmt(const RefreshMatViewStmt *from)
+{
+	RefreshMatViewStmt *newnode = makeNode(RefreshMatViewStmt);
+
+	COPY_SCALAR_FIELD(concurrent);
+	COPY_SCALAR_FIELD(skipData);
+	COPY_NODE_FIELD(relation);
 
 	return newnode;
 }
@@ -3614,6 +3652,7 @@ _copyCreateSchemaStmt(const CreateSchemaStmt *from)
 	COPY_STRING_FIELD(schemaname);
 	COPY_STRING_FIELD(authid);
 	COPY_NODE_FIELD(schemaElts);
+	COPY_SCALAR_FIELD(if_not_exists);
 
 	return newnode;
 }
@@ -4301,6 +4340,9 @@ copyObject(const void *from)
 		case T_CreateTableAsStmt:
 			retval = _copyCreateTableAsStmt(from);
 			break;
+		case T_RefreshMatViewStmt:
+			retval = _copyRefreshMatViewStmt(from);
+			break;
 		case T_CreateSeqStmt:
 			retval = _copyCreateSeqStmt(from);
 			break;
@@ -4493,6 +4535,9 @@ copyObject(const void *from)
 			break;
 		case T_RangeTblEntry:
 			retval = _copyRangeTblEntry(from);
+			break;
+		case T_WithCheckOption:
+			retval = _copyWithCheckOption(from);
 			break;
 		case T_SortGroupClause:
 			retval = _copySortGroupClause(from);

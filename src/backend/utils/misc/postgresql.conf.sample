@@ -27,7 +27,7 @@
 # Memory units:  kB = kilobytes        Time units:  ms  = milliseconds
 #                MB = megabytes                     s   = seconds
 #                GB = gigabytes                     min = minutes
-#                                                   h   = hours
+#                TB = terabytes                     h   = hours
 #                                                   d   = days
 
 
@@ -79,7 +79,7 @@
 
 #authentication_timeout = 1min		# 1s-600s
 #ssl = off				# (change requires restart)
-#ssl_ciphers = 'ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH'	# allowed SSL ciphers
+#ssl_ciphers = 'DEFAULT:!LOW:!EXP:!MD5:@STRENGTH'	# allowed SSL ciphers
 					# (change requires restart)
 #ssl_renegotiation_limit = 512MB	# amount of data between renegotiations
 #ssl_cert_file = 'server.crt'		# (change requires restart)
@@ -123,6 +123,13 @@
 #work_mem = 1MB				# min 64kB
 #maintenance_work_mem = 16MB		# min 1MB
 #max_stack_depth = 2MB			# min 100kB
+#dynamic_shared_memory_type = posix # the default is the first option
+					# supported by the operating system:
+					#   posix
+					#   sysv
+					#   windows
+					#   mmap
+					# use none to disable dynamic shared memory
 
 # - Disk -
 
@@ -152,6 +159,7 @@
 # - Asynchronous Behavior -
 
 #effective_io_concurrency = 1		# 1-1000; 0 disables prefetching
+#max_worker_processes = 8
 
 
 #------------------------------------------------------------------------------
@@ -210,7 +218,7 @@
 #max_wal_senders = 0		# max number of walsender processes
 				# (change requires restart)
 #wal_keep_segments = 0		# in logfile segments, 16MB each; 0 disables
-#replication_timeout = 60s	# in milliseconds; 0 disables
+#wal_sender_timeout = 60s	# in milliseconds; 0 disables
 
 # - Master Server -
 
@@ -237,6 +245,9 @@
 					# 0 disables
 #hot_standby_feedback = off		# send info from standby to prevent
 					# query conflicts
+#wal_receiver_timeout = 60s		# time that receiver waits for
+					# communication from master
+					# in milliseconds; 0 disables
 
 
 #------------------------------------------------------------------------------
@@ -264,7 +275,7 @@
 #cpu_tuple_cost = 0.01			# same scale as above
 #cpu_index_tuple_cost = 0.005		# same scale as above
 #cpu_operator_cost = 0.0025		# same scale as above
-#effective_cache_size = 128MB
+#effective_cache_size = -1
 
 # - Genetic Query Optimizer -
 
@@ -486,6 +497,7 @@
 #default_transaction_deferrable = off
 #session_replication_role = 'origin'
 #statement_timeout = 0			# in milliseconds, 0 is disabled
+#lock_timeout = 0			# in milliseconds, 0 is disabled
 #vacuum_freeze_min_age = 50000000
 #vacuum_freeze_table_age = 150000000
 #bytea_output = 'hex'			# hex, escape
@@ -565,6 +577,19 @@
 
 #exit_on_error = off			# terminate session on any error?
 #restart_after_crash = on		# reinitialize after backend crash?
+
+
+#------------------------------------------------------------------------------
+# CONFIG FILE INCLUDES
+#------------------------------------------------------------------------------
+
+# These options allow settings to be loaded from files other than the
+# default postgresql.conf.
+
+#include_dir = 'conf.d'			# include files ending in '.conf' from
+					# directory 'conf.d'
+#include_if_exists = 'exists.conf'	# include file only if it exists
+#include = 'special.conf'		# include file
 
 
 #------------------------------------------------------------------------------

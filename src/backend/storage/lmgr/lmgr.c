@@ -3,7 +3,7 @@
  * lmgr.c
  *	  POSTGRES lock manager code
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -230,6 +230,24 @@ UnlockRelation(Relation relation, LOCKMODE lockmode)
 						 relation->rd_lockInfo.lockRelId.relId);
 
 	LockRelease(&tag, lockmode, false);
+}
+
+/*
+ *		LockHasWaitersRelation
+ *
+ * This is a functiion to check if someone else is waiting on a
+ * lock, we are currently holding.
+ */
+bool
+LockHasWaitersRelation(Relation relation, LOCKMODE lockmode)
+{
+	LOCKTAG		tag;
+
+	SET_LOCKTAG_RELATION(tag,
+						 relation->rd_lockInfo.lockRelId.dbId,
+						 relation->rd_lockInfo.lockRelId.relId);
+
+	return LockHasWaiters(&tag, lockmode, false);
 }
 
 /*
@@ -514,6 +532,73 @@ ConditionalXactLockTableWait(TransactionId xid)
 
 	return true;
 }
+
+/*
+ * WaitForLockersMultiple
+ *		Wait until no transaction holds locks that conflict with the given
+ *		locktags at the given lockmode.
+ *
+ * To do this, obtain the current list of lockers, and wait on their VXIDs
+ * until they are finished.
+ *
+ * Note we don't try to acquire the locks on the given locktags, only the VXIDs
+ * of its lock holders; if somebody grabs a conflicting lock on the objects
+ * after we obtained our initial list of lockers, we will not wait for them.
+ */
+void
+WaitForLockersMultiple(List *locktags, LOCKMODE lockmode)
+{
+	List	   *holders = NIL;
+	ListCell   *lc;
+
+	/* Done if no locks to wait for */
+	if (list_length(locktags) == 0)
+		return;
+
+	/* Collect the transactions we need to wait on */
+	foreach(lc, locktags)
+	{
+		LOCKTAG    *locktag = lfirst(lc);
+
+		holders = lappend(holders, GetLockConflicts(locktag, lockmode));
+	}
+
+	/*
+	 * Note: GetLockConflicts() never reports our own xid, hence we need not
+	 * check for that.	Also, prepared xacts are not reported, which is fine
+	 * since they certainly aren't going to do anything anymore.
+	 */
+
+	/* Finally wait for each such transaction to complete */
+	foreach(lc, holders)
+	{
+		VirtualTransactionId *lockholders = lfirst(lc);
+
+		while (VirtualTransactionIdIsValid(*lockholders))
+		{
+			VirtualXactLock(*lockholders, true);
+			lockholders++;
+		}
+	}
+
+	list_free_deep(holders);
+}
+
+/*
+ * WaitForLockers
+ *
+ * Same as WaitForLockersMultiple, for a single lock tag.
+ */
+void
+WaitForLockers(LOCKTAG heaplocktag, LOCKMODE lockmode)
+{
+	List   *l;
+
+	l = list_make1(&heaplocktag);
+	WaitForLockersMultiple(l, lockmode);
+	list_free(l);
+}
+
 
 /*
  *		LockDatabaseObject

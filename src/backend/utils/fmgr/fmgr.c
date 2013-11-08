@@ -3,7 +3,7 @@
  * fmgr.c
  *	  The Postgres function manager.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -448,10 +448,7 @@ fetch_finfo_record(void *filehandle, char *funcname)
 	const Pg_finfo_record *inforec;
 	static Pg_finfo_record default_inforec = {0};
 
-	/* Compute name of info func */
-	infofuncname = (char *) palloc(strlen(funcname) + 10);
-	strcpy(infofuncname, "pg_finfo_");
-	strcat(infofuncname, funcname);
+	infofuncname = psprintf("pg_finfo_%s", funcname);
 
 	/* Try to look up the info function */
 	infofunc = (PGFInfoFunction) lookup_external_function(filehandle,
@@ -2281,6 +2278,7 @@ pg_detoast_datum_packed(struct varlena * datum)
  * These are needed by polymorphic functions, which accept multiple possible
  * input types and need help from the parser to know what they've got.
  * Also, some functions might be interested in whether a parameter is constant.
+ * Functions taking VARIADIC ANY also need to know about the VARIADIC keyword.
  *-------------------------------------------------------------------------
  */
 
@@ -2444,4 +2442,29 @@ get_call_expr_arg_stable(Node *expr, int argnum)
 		return true;
 
 	return false;
+}
+
+/*
+ * Get the VARIADIC flag from the function invocation
+ *
+ * Returns false (the default assumption) if information is not available
+ */
+bool
+get_fn_expr_variadic(FmgrInfo *flinfo)
+{
+	Node	   *expr;
+
+	/*
+	 * can't return anything useful if we have no FmgrInfo or if its fn_expr
+	 * node has not been initialized
+	 */
+	if (!flinfo || !flinfo->fn_expr)
+		return false;
+
+	expr = flinfo->fn_expr;
+
+	if (IsA(expr, FuncExpr))
+		return ((FuncExpr *) expr)->funcvariadic;
+	else
+		return false;
 }

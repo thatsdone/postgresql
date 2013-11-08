@@ -11,7 +11,8 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = catalog.o dependency.o heap.o index.o indexing.o namespace.o aclchk.o \
-       objectaddress.o pg_aggregate.o pg_collation.o pg_constraint.o pg_conversion.o \
+       objectaccess.o objectaddress.o pg_aggregate.o pg_collation.o \
+       pg_constraint.o pg_conversion.o \
        pg_depend.o pg_enum.o pg_inherits.o pg_largeobject.o pg_namespace.o \
        pg_operator.o pg_proc.o pg_range.o pg_db_role_setting.o pg_shdepend.o \
        pg_type.o storage.o toasting.o
@@ -61,7 +62,8 @@ schemapg.h: postgres.bki ;
 # even in distribution tarballs.  So this is cheating a bit, but it
 # will achieve the goal of updating the version number when it
 # changes.
-postgres.bki: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(top_srcdir)/configure
+postgres.bki: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(top_srcdir)/configure $(top_srcdir)/src/include/catalog/duplicate_oids
+	cd $(top_srcdir)/src/include/catalog && $(PERL) ./duplicate_oids
 	$(PERL) -I $(catalogdir) $< $(pg_includes) --set-version=$(MAJORVERSION) $(POSTGRES_BKI_SRCS)
 
 .PHONY: install-data

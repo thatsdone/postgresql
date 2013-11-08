@@ -3,7 +3,7 @@
  * pl_comp.c		- Compiler part of the PL/pgSQL
  *			  procedural language
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -351,6 +351,7 @@ do_compile(FunctionCallInfo fcinfo,
 	function->fn_cxt = func_cxt;
 	function->out_param_varno = -1;		/* set up for no OUT param */
 	function->resolve_option = plpgsql_variable_conflict;
+	function->print_strict_params = plpgsql_print_strict_params;
 
 	if (is_dml_trigger)
 		function->fn_is_trigger = PLPGSQL_DML_TRIGGER;
@@ -847,6 +848,7 @@ plpgsql_compile_inline(char *proc_source)
 	function->fn_cxt = func_cxt;
 	function->out_param_varno = -1;		/* set up for no OUT param */
 	function->resolve_option = plpgsql_variable_conflict;
+	function->print_strict_params = plpgsql_print_strict_params;
 
 	plpgsql_ns_init();
 	plpgsql_ns_push(func_name);
@@ -1760,11 +1762,13 @@ plpgsql_parse_cwordtype(List *idents)
 	classStruct = (Form_pg_class) GETSTRUCT(classtup);
 
 	/*
-	 * It must be a relation, sequence, view, composite type, or foreign table
+	 * It must be a relation, sequence, view, materialized view, composite
+	 * type, or foreign table
 	 */
 	if (classStruct->relkind != RELKIND_RELATION &&
 		classStruct->relkind != RELKIND_SEQUENCE &&
 		classStruct->relkind != RELKIND_VIEW &&
+		classStruct->relkind != RELKIND_MATVIEW &&
 		classStruct->relkind != RELKIND_COMPOSITE_TYPE &&
 		classStruct->relkind != RELKIND_FOREIGN_TABLE)
 		goto done;
@@ -1982,10 +1986,14 @@ build_row_from_class(Oid classOid)
 	classStruct = RelationGetForm(rel);
 	relname = RelationGetRelationName(rel);
 
-	/* accept relation, sequence, view, composite type, or foreign table */
+	/*
+	 * Accept relation, sequence, view, materialized view, composite type, or
+	 * foreign table.
+	 */
 	if (classStruct->relkind != RELKIND_RELATION &&
 		classStruct->relkind != RELKIND_SEQUENCE &&
 		classStruct->relkind != RELKIND_VIEW &&
+		classStruct->relkind != RELKIND_MATVIEW &&
 		classStruct->relkind != RELKIND_COMPOSITE_TYPE &&
 		classStruct->relkind != RELKIND_FOREIGN_TABLE)
 		ereport(ERROR,

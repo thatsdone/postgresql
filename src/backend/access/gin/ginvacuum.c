@@ -4,7 +4,7 @@
  *	  delete & vacuum routines for the postgres GIN
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -147,7 +147,6 @@ xlogVacuumPage(Relation index, Buffer buffer)
 
 	recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_VACUUM_PAGE, rdata);
 	PageSetLSN(page, recptr);
-	PageSetTLI(page, ThisTimeLineID);
 }
 
 static bool
@@ -211,7 +210,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 
 		for (i = FirstOffsetNumber; i <= GinPageGetOpaque(page)->maxoff; i++)
 		{
-			PostingItem *pitem = (PostingItem *) GinDataPageGetItem(page, i);
+			PostingItem *pitem = GinDataPageGetPostingItem(page, i);
 
 			if (ginVacuumPostingTreeLeaves(gvs, PostingItemGetBlockNumber(pitem), FALSE, NULL))
 				isChildHasVoid = TRUE;
@@ -284,7 +283,7 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 #ifdef USE_ASSERT_CHECKING
 	do
 	{
-		PostingItem *tod = (PostingItem *) GinDataPageGetItem(parentPage, myoff);
+		PostingItem *tod = GinDataPageGetPostingItem(parentPage, myoff);
 
 		Assert(PostingItemGetBlockNumber(tod) == deleteBlkno);
 	} while (0);
@@ -350,14 +349,11 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_DELETE_PAGE, rdata);
 		PageSetLSN(page, recptr);
-		PageSetTLI(page, ThisTimeLineID);
 		PageSetLSN(parentPage, recptr);
-		PageSetTLI(parentPage, ThisTimeLineID);
 		if (leftBlkno != InvalidBlockNumber)
 		{
 			page = BufferGetPage(lBuffer);
 			PageSetLSN(page, recptr);
-			PageSetTLI(page, ThisTimeLineID);
 		}
 	}
 
@@ -426,7 +422,7 @@ ginScanToDelete(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, DataPageDel
 		me->blkno = blkno;
 		for (i = FirstOffsetNumber; i <= GinPageGetOpaque(page)->maxoff; i++)
 		{
-			PostingItem *pitem = (PostingItem *) GinDataPageGetItem(page, i);
+			PostingItem *pitem = GinDataPageGetPostingItem(page, i);
 
 			if (ginScanToDelete(gvs, PostingItemGetBlockNumber(pitem), FALSE, me, i))
 				i--;

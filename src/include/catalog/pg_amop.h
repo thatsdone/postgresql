@@ -30,7 +30,7 @@
  * intentional denormalization of the catalogs to buy lookup speed.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_amop.h
@@ -493,6 +493,16 @@ DATA(insert (	2994  2249 2249 4 s 2993	403 0 ));
 DATA(insert (	2994  2249 2249 5 s 2991	403 0 ));
 
 /*
+ *	btree record_image_ops
+ */
+
+DATA(insert (	3194  2249 2249 1 s 3190	403 0 ));
+DATA(insert (	3194  2249 2249 2 s 3192	403 0 ));
+DATA(insert (	3194  2249 2249 3 s 3188	403 0 ));
+DATA(insert (	3194  2249 2249 4 s 3193	403 0 ));
+DATA(insert (	3194  2249 2249 5 s 3191	403 0 ));
+
+/*
  * btree uuid_ops
  */
 
@@ -775,6 +785,7 @@ DATA(insert (	3474   3831 3831 2 s	3895 4000 0 ));
 DATA(insert (	3474   3831 3831 3 s	3888 4000 0 ));
 DATA(insert (	3474   3831 3831 4 s	3896 4000 0 ));
 DATA(insert (	3474   3831 3831 5 s	3894 4000 0 ));
+DATA(insert (	3474   3831 3831 6 s	3897 4000 0 ));
 DATA(insert (	3474   3831 3831 7 s	3890 4000 0 ));
 DATA(insert (	3474   3831 3831 8 s	3892 4000 0 ));
 DATA(insert (	3474   3831 2283 16 s	3889 4000 0 ));

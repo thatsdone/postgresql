@@ -7,7 +7,7 @@
  *	AccessExclusiveLocks and starting snapshots for Hot Standby mode.
  *	Plus conflict recovery processing.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -105,6 +105,9 @@ ShutdownRecoveryTransactionEnvironment(void)
 
 	/* Release all locks the tracked transactions were holding */
 	StandbyReleaseAllLocks();
+
+	/* Cleanup our VirtualTransaction */
+	VirtualXactLockTableCleanup();
 }
 
 
@@ -425,18 +428,25 @@ ResolveRecoveryConflictWithBufferPin(void)
 		 * Wake up at ltime, and check for deadlocks as well if we will be
 		 * waiting longer than deadlock_timeout
 		 */
-		enable_timeout_after(STANDBY_DEADLOCK_TIMEOUT, DeadlockTimeout);
-		enable_timeout_at(STANDBY_TIMEOUT, ltime);
+		EnableTimeoutParams timeouts[2];
+
+		timeouts[0].id = STANDBY_TIMEOUT;
+		timeouts[0].type = TMPARAM_AT;
+		timeouts[0].fin_time = ltime;
+		timeouts[1].id = STANDBY_DEADLOCK_TIMEOUT;
+		timeouts[1].type = TMPARAM_AFTER;
+		timeouts[1].delay_ms = DeadlockTimeout;
+		enable_timeouts(timeouts, 2);
 	}
 
 	/* Wait to be signaled by UnpinBuffer() */
 	ProcWaitForSignal();
 
 	/*
-	 * Clear any timeout requests established above.  We assume here that
-	 * the Startup process doesn't have any other timeouts than what this
-	 * function uses.  If that stops being true, we could cancel the
-	 * timeouts individually, but that'd be slower.
+	 * Clear any timeout requests established above.  We assume here that the
+	 * Startup process doesn't have any other timeouts than what this function
+	 * uses.  If that stops being true, we could cancel the timeouts
+	 * individually, but that'd be slower.
 	 */
 	disable_all_timeouts(false);
 }
@@ -539,6 +549,10 @@ StandbyTimeoutHandler(void)
  * We keep a single dynamically expandible list of locks in local memory,
  * RelationLockList, so we can keep track of the various entries made by
  * the Startup process's virtual xid in the shared lock table.
+ *
+ * We record the lock against the top-level xid, rather than individual
+ * subtransaction xids. This means AccessExclusiveLocks held by aborted
+ * subtransactions are not released as early as possible on standbys.
  *
  * List elements use type xl_rel_lock, since the WAL record type exactly
  * matches the information that we need to keep track of.
@@ -673,8 +687,8 @@ StandbyReleaseAllLocks(void)
 
 /*
  * StandbyReleaseOldLocks
- *		Release standby locks held by XIDs that aren't running, as long
- *		as they're not prepared transactions.
+ *		Release standby locks held by top-level XIDs that aren't running,
+ *		as long as they're not prepared transactions.
  */
 void
 StandbyReleaseOldLocks(int nxids, TransactionId *xids)
@@ -771,6 +785,7 @@ standby_redo(XLogRecPtr lsn, XLogRecord *record)
 		RunningTransactionsData running;
 
 		running.xcnt = xlrec->xcnt;
+		running.subxcnt = xlrec->subxcnt;
 		running.subxid_overflow = xlrec->subxid_overflow;
 		running.nextXid = xlrec->nextXid;
 		running.latestCompletedXid = xlrec->latestCompletedXid;
@@ -781,54 +796,6 @@ standby_redo(XLogRecPtr lsn, XLogRecord *record)
 	}
 	else
 		elog(PANIC, "standby_redo: unknown op code %u", info);
-}
-
-static void
-standby_desc_running_xacts(StringInfo buf, xl_running_xacts *xlrec)
-{
-	int			i;
-
-	appendStringInfo(buf, " nextXid %u latestCompletedXid %u oldestRunningXid %u",
-					 xlrec->nextXid,
-					 xlrec->latestCompletedXid,
-					 xlrec->oldestRunningXid);
-	if (xlrec->xcnt > 0)
-	{
-		appendStringInfo(buf, "; %d xacts:", xlrec->xcnt);
-		for (i = 0; i < xlrec->xcnt; i++)
-			appendStringInfo(buf, " %u", xlrec->xids[i]);
-	}
-
-	if (xlrec->subxid_overflow)
-		appendStringInfo(buf, "; subxid ovf");
-}
-
-void
-standby_desc(StringInfo buf, uint8 xl_info, char *rec)
-{
-	uint8		info = xl_info & ~XLR_INFO_MASK;
-
-	if (info == XLOG_STANDBY_LOCK)
-	{
-		xl_standby_locks *xlrec = (xl_standby_locks *) rec;
-		int			i;
-
-		appendStringInfo(buf, "AccessExclusive locks:");
-
-		for (i = 0; i < xlrec->nlocks; i++)
-			appendStringInfo(buf, " xid %u db %u rel %u",
-							 xlrec->locks[i].xid, xlrec->locks[i].dbOid,
-							 xlrec->locks[i].relOid);
-	}
-	else if (info == XLOG_RUNNING_XACTS)
-	{
-		xl_running_xacts *xlrec = (xl_running_xacts *) rec;
-
-		appendStringInfo(buf, " running xacts:");
-		standby_desc_running_xacts(buf, xlrec);
-	}
-	else
-		appendStringInfo(buf, "UNKNOWN");
 }
 
 /*
@@ -888,7 +855,7 @@ standby_desc(StringInfo buf, uint8 xl_info, char *rec)
  * from a time when they were possible.
  */
 void
-LogStandbySnapshot(TransactionId *nextXid)
+LogStandbySnapshot(void)
 {
 	RunningTransactions running;
 	xl_standby_lock *locks;
@@ -898,16 +865,11 @@ LogStandbySnapshot(TransactionId *nextXid)
 
 	/*
 	 * Get details of any AccessExclusiveLocks being held at the moment.
-	 *
-	 * XXX GetRunningTransactionLocks() currently holds a lock on all
-	 * partitions though it is possible to further optimise the locking. By
-	 * reference counting locks and storing the value on the ProcArray entry
-	 * for each backend we can easily tell if any locks need recording without
-	 * trying to acquire the partition locks and scanning the lock table.
 	 */
 	locks = GetRunningTransactionLocks(&nlocks);
 	if (nlocks > 0)
 		LogAccessExclusiveLocks(nlocks, locks);
+	pfree(locks);
 
 	/*
 	 * Log details of all in-progress transactions. This should be the last
@@ -917,8 +879,6 @@ LogStandbySnapshot(TransactionId *nextXid)
 	LogCurrentRunningXacts(running);
 	/* GetRunningTransactionData() acquired XidGenLock, we must release it */
 	LWLockRelease(XidGenLock);
-
-	*nextXid = running->nextXid;
 }
 
 /*
@@ -938,6 +898,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 	XLogRecPtr	recptr;
 
 	xlrec.xcnt = CurrRunningXacts->xcnt;
+	xlrec.subxcnt = CurrRunningXacts->subxcnt;
 	xlrec.subxid_overflow = CurrRunningXacts->subxid_overflow;
 	xlrec.nextXid = CurrRunningXacts->nextXid;
 	xlrec.oldestRunningXid = CurrRunningXacts->oldestRunningXid;
@@ -953,7 +914,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 	{
 		rdata[0].next = &(rdata[1]);
 		rdata[1].data = (char *) CurrRunningXacts->xids;
-		rdata[1].len = xlrec.xcnt * sizeof(TransactionId);
+		rdata[1].len = (xlrec.xcnt + xlrec.subxcnt) * sizeof(TransactionId);
 		rdata[1].buffer = InvalidBuffer;
 		lastrdata = 1;
 	}
@@ -972,8 +933,8 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 			 CurrRunningXacts->nextXid);
 	else
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
-			 CurrRunningXacts->xcnt,
+			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 CurrRunningXacts->xcnt, CurrRunningXacts->subxcnt,
 			 (uint32) (recptr >> 32), (uint32) recptr,
 			 CurrRunningXacts->oldestRunningXid,
 			 CurrRunningXacts->latestCompletedXid,

@@ -3,7 +3,7 @@
  * auth.c
  *	  Routines to handle network authentication
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -297,9 +297,16 @@ auth_failed(Port *port, int status)
 			break;
 	}
 
-	ereport(FATAL,
-			(errcode(errcode_return),
-			 errmsg(errstr, port->user_name)));
+	if (port->hba)
+		ereport(FATAL,
+				(errcode(errcode_return),
+				 errmsg(errstr, port->user_name),
+				 errdetail_log("Connection matched pg_hba.conf line %d: \"%s\"", port->hba->linenumber, port->hba->rawline)));
+	else
+		ereport(FATAL,
+				(errcode(errcode_return),
+				 errmsg(errstr, port->user_name)));
+
 	/* doesn't return */
 }
 
@@ -820,7 +827,7 @@ pg_krb5_recvauth(Port *port)
 		return ret;
 
 	retval = krb5_recvauth(pg_krb5_context, &auth_context,
-						   (krb5_pointer) &port->sock, pg_krb_srvnam,
+						   (krb5_pointer) & port->sock, pg_krb_srvnam,
 						   pg_krb5_server, 0, pg_krb5_keytab, &ticket);
 	if (retval)
 	{
@@ -1481,8 +1488,7 @@ pg_SSPI_recvauth(Port *port)
 		char	   *namebuf;
 		int			retval;
 
-		namebuf = palloc(strlen(accountname) + strlen(domainname) + 2);
-		sprintf(namebuf, "%s@%s", accountname, domainname);
+		namebuf = psprintf("%s@%s", accountname, domainname);
 		retval = check_usermap(port->hba->usermap, port->user_name, namebuf, true);
 		pfree(namebuf);
 		return retval;
@@ -1931,7 +1937,7 @@ CheckPAMAuth(Port *port, char *user, char *password)
 	pam_port_cludge = port;
 
 	/*
-	 * Set the application data portion of the conversation struct This is
+	 * Set the application data portion of the conversation struct.  This is
 	 * later used inside the PAM conversation to pass the password to the
 	 * authentication module.
 	 */
@@ -2037,8 +2043,7 @@ InitializeLDAPConnection(Port *port, LDAP **ldap)
 	{
 #ifndef WIN32
 		ereport(LOG,
-				(errmsg("could not initialize LDAP: error code %d",
-						errno)));
+				(errmsg("could not initialize LDAP: %m")));
 #else
 		ereport(LOG,
 				(errmsg("could not initialize LDAP: error code %d",
@@ -2051,7 +2056,7 @@ InitializeLDAPConnection(Port *port, LDAP **ldap)
 	{
 		ldap_unbind(*ldap);
 		ereport(LOG,
-		  (errmsg("could not set LDAP protocol version: error code %d", r)));
+				(errmsg("could not set LDAP protocol version: %s", ldap_err2string(r))));
 		return STATUS_ERROR;
 	}
 
@@ -2104,7 +2109,7 @@ InitializeLDAPConnection(Port *port, LDAP **ldap)
 		{
 			ldap_unbind(*ldap);
 			ereport(LOG,
-			 (errmsg("could not start LDAP TLS session: error code %d", r)));
+					(errmsg("could not start LDAP TLS session: %s", ldap_err2string(r))));
 			return STATUS_ERROR;
 		}
 	}
@@ -2162,6 +2167,7 @@ CheckLDAPAuth(Port *port)
 		char	   *attributes[2];
 		char	   *dn;
 		char	   *c;
+		int			count;
 
 		/*
 		 * Disallow any characters that we would otherwise need to escape,
@@ -2193,8 +2199,8 @@ CheckLDAPAuth(Port *port)
 		if (r != LDAP_SUCCESS)
 		{
 			ereport(LOG,
-					(errmsg("could not perform initial LDAP bind for ldapbinddn \"%s\" on server \"%s\": error code %d",
-						  port->hba->ldapbinddn, port->hba->ldapserver, r)));
+					(errmsg("could not perform initial LDAP bind for ldapbinddn \"%s\" on server \"%s\": %s",
+							port->hba->ldapbinddn, port->hba->ldapserver, ldap_err2string(r))));
 			return STATUS_ERROR;
 		}
 
@@ -2202,14 +2208,13 @@ CheckLDAPAuth(Port *port)
 		attributes[0] = port->hba->ldapsearchattribute ? port->hba->ldapsearchattribute : "uid";
 		attributes[1] = NULL;
 
-		filter = palloc(strlen(attributes[0]) + strlen(port->user_name) + 4);
-		sprintf(filter, "(%s=%s)",
+		filter = psprintf("(%s=%s)",
 				attributes[0],
 				port->user_name);
 
 		r = ldap_search_s(ldap,
 						  port->hba->ldapbasedn,
-						  LDAP_SCOPE_SUBTREE,
+						  port->hba->ldapscope,
 						  filter,
 						  attributes,
 						  0,
@@ -2218,23 +2223,27 @@ CheckLDAPAuth(Port *port)
 		if (r != LDAP_SUCCESS)
 		{
 			ereport(LOG,
-					(errmsg("could not search LDAP for filter \"%s\" on server \"%s\": error code %d",
-							filter, port->hba->ldapserver, r)));
+					(errmsg("could not search LDAP for filter \"%s\" on server \"%s\": %s",
+						filter, port->hba->ldapserver, ldap_err2string(r))));
 			pfree(filter);
 			return STATUS_ERROR;
 		}
 
-		if (ldap_count_entries(ldap, search_message) != 1)
+		count = ldap_count_entries(ldap, search_message);
+		if (count != 1)
 		{
-			if (ldap_count_entries(ldap, search_message) == 0)
+			if (count == 0)
 				ereport(LOG,
-						(errmsg("LDAP search failed for filter \"%s\" on server \"%s\": no such user",
-								filter, port->hba->ldapserver)));
+				 (errmsg("LDAP user \"%s\" does not exist", port->user_name),
+				  errdetail("LDAP search for filter \"%s\" on server \"%s\" returned no entries.",
+							filter, port->hba->ldapserver)));
 			else
 				ereport(LOG,
-						(errmsg("LDAP search failed for filter \"%s\" on server \"%s\": user is not unique (%ld matches)",
-								filter, port->hba->ldapserver,
-						  (long) ldap_count_entries(ldap, search_message))));
+				  (errmsg("LDAP user \"%s\" is not unique", port->user_name),
+				   errdetail_plural("LDAP search for filter \"%s\" on server \"%s\" returned %d entry.",
+									"LDAP search for filter \"%s\" on server \"%s\" returned %d entries.",
+									count,
+									filter, port->hba->ldapserver, count)));
 
 			pfree(filter);
 			ldap_msgfree(search_message);
@@ -2288,17 +2297,10 @@ CheckLDAPAuth(Port *port)
 		}
 	}
 	else
-	{
-		fulluser = palloc((port->hba->ldapprefix ? strlen(port->hba->ldapprefix) : 0) +
-						  strlen(port->user_name) +
-				(port->hba->ldapsuffix ? strlen(port->hba->ldapsuffix) : 0) +
-						  1);
-
-		sprintf(fulluser, "%s%s%s",
+		fulluser = psprintf("%s%s%s",
 				port->hba->ldapprefix ? port->hba->ldapprefix : "",
 				port->user_name,
 				port->hba->ldapsuffix ? port->hba->ldapsuffix : "");
-	}
 
 	r = ldap_simple_bind_s(ldap, fulluser, passwd);
 	ldap_unbind(ldap);
@@ -2306,8 +2308,8 @@ CheckLDAPAuth(Port *port)
 	if (r != LDAP_SUCCESS)
 	{
 		ereport(LOG,
-				(errmsg("LDAP login failed for user \"%s\" on server \"%s\": error code %d",
-						fulluser, port->hba->ldapserver, r)));
+			(errmsg("LDAP login failed for user \"%s\" on server \"%s\": %s",
+					fulluser, port->hba->ldapserver, ldap_err2string(r))));
 		pfree(fulluser);
 		return STATUS_ERROR;
 	}

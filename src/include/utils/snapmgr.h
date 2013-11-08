@@ -3,7 +3,7 @@
  * snapmgr.h
  *	  POSTGRES snapshot manager
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/snapmgr.h
@@ -28,6 +28,9 @@ extern Snapshot GetTransactionSnapshot(void);
 extern Snapshot GetLatestSnapshot(void);
 extern void SnapshotSetCommandId(CommandId curcid);
 
+extern Snapshot GetCatalogSnapshot(Oid relid);
+extern void InvalidateCatalogSnapshot(void);
+
 extern void PushActiveSnapshot(Snapshot snapshot);
 extern void PushCopiedSnapshot(Snapshot snapshot);
 extern void UpdateActiveSnapshotCommandId(void);
@@ -48,5 +51,6 @@ extern Datum pg_export_snapshot(PG_FUNCTION_ARGS);
 extern void ImportSnapshot(const char *idstr);
 extern bool XactHasExportedSnapshots(void);
 extern void DeleteAllExportedSnapshotFiles(void);
+extern bool ThereAreNoPriorRegisteredSnapshots(void);
 
 #endif   /* SNAPMGR_H */

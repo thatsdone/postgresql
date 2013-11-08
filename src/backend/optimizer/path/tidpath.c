@@ -25,7 +25,7 @@
  * for that.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -255,8 +255,7 @@ create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel)
 	/*
 	 * We don't support pushing join clauses into the quals of a tidscan, but
 	 * it could still have required parameterization due to LATERAL refs in
-	 * its tlist.  (That can only happen if the tidscan is on a relation
-	 * pulled up out of a UNION ALL appendrel.)
+	 * its tlist.
 	 */
 	required_outer = rel->lateral_relids;
 

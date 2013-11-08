@@ -351,7 +351,7 @@
         <entry><type>bigint</></entry>
         <entry>8 bytes</entry>
         <entry>large-range integer</entry>
-        <entry>-9223372036854775808 to 9223372036854775807</entry>
+        <entry>-9223372036854775808 to +9223372036854775807</entry>
        </row>
 
        <row>
@@ -680,6 +680,17 @@ NUMERIC
      Numbers too close to zero that are not representable as distinct
      from zero will cause an underflow error.
     </para>
+
+    <note>
+     <para>
+      The <xref linkend="guc-extra-float-digits"> setting controls the
+      number of extra significant digits included when a floating point
+      value is converted to text for output.  With the default value of
+      <literal>0</literal>, the output is the same on every platform
+      supported by PostgreSQL.  Increasing it will produce output that
+      more accurately represents the stored value, but may be unportable.
+     </para>
+    </note>
 
     <indexterm>
      <primary>not a number</primary>
@@ -3040,9 +3051,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
    <para>
     Geometric data types represent two-dimensional spatial
     objects. <xref linkend="datatype-geo-table"> shows the geometric
-    types available in <productname>PostgreSQL</productname>.  The
-    most fundamental type, the point, forms the basis for all of the
-    other types.
+    types available in <productname>PostgreSQL</productname>.
    </para>
 
     <table id="datatype-geo-table">
@@ -3052,8 +3061,8 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
        <row>
         <entry>Name</entry>
         <entry>Storage Size</entry>
-        <entry>Representation</entry>
         <entry>Description</entry>
+        <entry>Representation</entry>
        </row>
       </thead>
       <tbody>
@@ -3066,8 +3075,8 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
        <row>
         <entry><type>line</type></entry>
         <entry>32 bytes</entry>
-        <entry>Infinite line (not fully implemented)</entry>
-        <entry>((x1,y1),(x2,y2))</entry>
+        <entry>Infinite line</entry>
+        <entry>{A,B,C}</entry>
        </row>
        <row>
         <entry><type>lseg</type></entry>
@@ -3138,6 +3147,38 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
 
     <para>
      Points are output using the first syntax.
+    </para>
+   </sect2>
+
+   <sect2>
+    <title>Lines</title>
+
+    <indexterm>
+     <primary>line</primary>
+    </indexterm>
+
+    <para>
+     Lines (<type>line</type>) are represented by the linear equation Ax + By
+     + C = 0, where A and B are not both zero.  Values of
+     type <type>line</type> is input and output in the following form:
+<synopsis>
+{ <replaceable>A</replaceable>, <replaceable>B</replaceable>, <replaceable>C</replaceable> }
+</synopsis>
+
+     Alternatively, any of the following forms can be used for input:
+
+<synopsis>
+[ ( <replaceable>x1</replaceable> , <replaceable>y1</replaceable> ) , ( <replaceable>x2</replaceable> , <replaceable>y2</replaceable> ) ]
+( ( <replaceable>x1</replaceable> , <replaceable>y1</replaceable> ) , ( <replaceable>x2</replaceable> , <replaceable>y2</replaceable> ) )
+  ( <replaceable>x1</replaceable> , <replaceable>y1</replaceable> ) , ( <replaceable>x2</replaceable> , <replaceable>y2</replaceable> )
+    <replaceable>x1</replaceable> , <replaceable>y1</replaceable>   ,   <replaceable>x2</replaceable> , <replaceable>y2</replaceable>
+</synopsis>
+
+     where
+     <literal>(<replaceable>x1</replaceable>,<replaceable>y1</replaceable>)</literal>
+     and
+     <literal>(<replaceable>x2</replaceable>,<replaceable>y2</replaceable>)</literal>
+     are two (different) points on the line.
     </para>
    </sect2>
 
@@ -3596,7 +3637,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
      as the canonical form for MAC addresses, and specifies the first
      form (with colons) as the bit-reversed notation, so that
      08-00-2b-01-02-03 = 01:00:4D:08:04:0C.  This convention is widely
-     ignored nowadays, and it is only relevant for obsolete network
+     ignored nowadays, and it is relevant only for obsolete network
      protocols (such as Token Ring).  PostgreSQL makes no provisions
      for bit reversal, and all accepted formats use the canonical LSB
      order.
@@ -4098,7 +4139,7 @@ SET xmloption TO { DOCUMENT | CONTENT };
     representations of XML values, such as in the above examples.
     This would ordinarily mean that encoding declarations contained in
     XML data can become invalid as the character data is converted
-    to other encodings while travelling between client and server,
+    to other encodings while traveling between client and server,
     because the embedded encoding declaration is not changed.  To cope
     with this behavior, encoding declarations contained in
     character strings presented for input to the <type>xml</type> type

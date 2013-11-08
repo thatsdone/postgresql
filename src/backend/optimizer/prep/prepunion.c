@@ -17,7 +17,7 @@
  * append relations, and thenceforth share code with the UNION ALL case.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -982,7 +982,7 @@ generate_setop_tlist(List *colTypes, List *colCollations,
 											exprType(expr),
 											exprTypmod(expr),
 											colColl,
-											COERCE_DONTCARE);
+											COERCE_IMPLICIT_CAST);
 		}
 
 		tle = makeTargetEntry((Expr *) expr,

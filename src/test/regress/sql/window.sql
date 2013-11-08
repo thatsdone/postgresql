@@ -145,6 +145,12 @@ select ten,
 from tenk1
 group by ten order by ten;
 
+-- window and aggregate with GROUP BY expression (9.2 bug)
+explain (costs off)
+select first_value(max(x)) over (), y
+  from (select unique1 as x, ten+four as y from tenk1) ss
+  group by y;
+
 -- test non-default frame specifications
 SELECT four, ten,
 	sum(ten) over (partition by four order by ten),
@@ -257,6 +263,14 @@ SELECT generate_series(1, 100) OVER () FROM empsalary;
 SELECT ntile(0) OVER (ORDER BY ten), ten, four FROM tenk1;
 
 SELECT nth_value(four, 0) OVER (ORDER BY ten), ten, four FROM tenk1;
+
+-- filter
+
+SELECT sum(salary), row_number() OVER (ORDER BY depname), sum(
+    sum(salary) FILTER (WHERE enroll_date > '2007-01-01')
+) FILTER (WHERE depname <> 'sales') OVER (ORDER BY depname DESC) AS "filtered_sum",
+    depname
+FROM empsalary GROUP BY depname;
 
 -- cleanup
 DROP TABLE empsalary;

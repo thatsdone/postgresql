@@ -6,7 +6,7 @@
  * for developers.	If you edit any of these, be sure to do a *full*
  * rebuild (and an initdb if noted).
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/pg_config_manual.h
@@ -200,11 +200,37 @@
 #endif
 
 /*
+ * Assumed cache line size. This doesn't affect correctness, but can be
+ * used for low-level optimizations. Currently, this is only used to pad
+ * some data structures in xlog.c, to ensure that highly-contended fields
+ * are on different cache lines. Too small a value can hurt performance due
+ * to false sharing, while the only downside of too large a value is a few
+ * bytes of wasted memory. The default is 128, which should be large enough
+ * for all supported platforms.
+ */
+#define CACHE_LINE_SIZE		128
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.
  *------------------------------------------------------------------------
  */
+
+/*
+ * Include Valgrind "client requests", mostly in the memory allocator, so
+ * Valgrind understands PostgreSQL memory contexts.  This permits detecting
+ * memory errors that Valgrind would not detect on a vanilla build.  See also
+ * src/tools/valgrind.supp.  "make installcheck" runs 20-30x longer under
+ * Valgrind.  Note that USE_VALGRIND slowed older versions of Valgrind by an
+ * additional order of magnitude; Valgrind 3.8.1 does not have this problem.
+ * The client requests fall in hot code paths, so USE_VALGRIND also slows
+ * native execution by a few percentage points.
+ *
+ * You should normally use MEMORY_CONTEXT_CHECKING with USE_VALGRIND;
+ * instrumentation of repalloc() is inferior without it.
+ */
+/* #define USE_VALGRIND */
 
 /*
  * Define this to cause pfree()'d memory to be cleared immediately, to
@@ -218,9 +244,9 @@
 /*
  * Define this to check memory allocation errors (scribbling on more
  * bytes than were allocated).	Right now, this gets defined
- * automatically if --enable-cassert.
+ * automatically if --enable-cassert or USE_VALGRIND.
  */
-#ifdef USE_ASSERT_CHECKING
+#if defined(USE_ASSERT_CHECKING) || defined(USE_VALGRIND)
 #define MEMORY_CONTEXT_CHECKING
 #endif
 

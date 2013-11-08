@@ -31,7 +31,7 @@
  * should be killed by SIGQUIT and then a recovery cycle started.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -188,6 +188,7 @@ WalWriterMain(void)
 							 false, true);
 		/* we needn't bother with the other ResourceOwnerRelease phases */
 		AtEOXact_Buffers(false);
+		AtEOXact_SMgr();
 		AtEOXact_Files();
 		AtEOXact_HashTables(false);
 

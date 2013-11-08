@@ -4,7 +4,7 @@
  *	  POSTGRES low-level lock mechanism
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/lock.h
@@ -478,6 +478,7 @@ typedef enum
 extern void InitLocks(void);
 extern LockMethod GetLocksMethodTable(const LOCK *lock);
 extern uint32 LockTagHashCode(const LOCKTAG *locktag);
+extern bool DoLockModesConflict(LOCKMODE mode1, LOCKMODE mode2);
 extern LockAcquireResult LockAcquire(const LOCKTAG *locktag,
 			LOCKMODE lockmode,
 			bool sessionLock,
@@ -494,13 +495,15 @@ extern void LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks);
 extern void LockReleaseSession(LOCKMETHODID lockmethodid);
 extern void LockReleaseCurrentOwner(LOCALLOCK **locallocks, int nlocks);
 extern void LockReassignCurrentOwner(LOCALLOCK **locallocks, int nlocks);
+extern bool LockHasWaiters(const LOCKTAG *locktag,
+			   LOCKMODE lockmode, bool sessionLock);
 extern VirtualTransactionId *GetLockConflicts(const LOCKTAG *locktag,
 				 LOCKMODE lockmode);
 extern void AtPrepare_Locks(void);
 extern void PostPrepare_Locks(TransactionId xid);
 extern int LockCheckConflicts(LockMethod lockMethodTable,
 				   LOCKMODE lockmode,
-				   LOCK *lock, PROCLOCK *proclock, PGPROC *proc);
+				   LOCK *lock, PROCLOCK *proclock);
 extern void GrantLock(LOCK *lock, PROCLOCK *proclock, LOCKMODE lockmode);
 extern void GrantAwaitedLock(void);
 extern void RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode);
@@ -530,7 +533,7 @@ extern void lock_twophase_standby_recover(TransactionId xid, uint16 info,
 
 extern DeadLockState DeadLockCheck(PGPROC *proc);
 extern PGPROC *GetBlockingAutoVacuumPgproc(void);
-extern void DeadLockReport(void);
+extern void DeadLockReport(void) __attribute__((noreturn));
 extern void RememberSimpleDeadLock(PGPROC *proc1,
 					   LOCKMODE lockmode,
 					   LOCK *lock,
@@ -544,6 +547,7 @@ extern void DumpAllLocks(void);
 
 /* Lock a VXID (used to wait for a transaction to finish) */
 extern void VirtualXactLockTableInsert(VirtualTransactionId vxid);
+extern void VirtualXactLockTableCleanup(void);
 extern bool VirtualXactLock(VirtualTransactionId vxid, bool wait);
 
 #endif   /* LOCK_H */

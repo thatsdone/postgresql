@@ -3,7 +3,7 @@
  * indexcmds.c
  *	  POSTGRES define and remove index code.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -124,6 +124,7 @@ CheckIndexCompatible(Oid oldId,
 	Oid			accessMethodId;
 	Oid			relationId;
 	HeapTuple	tuple;
+	Form_pg_index indexForm;
 	Form_pg_am	accessMethodForm;
 	bool		amcanorder;
 	int16	   *coloptions;
@@ -193,17 +194,22 @@ CheckIndexCompatible(Oid oldId,
 	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(oldId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u", oldId);
+	indexForm = (Form_pg_index) GETSTRUCT(tuple);
 
-	/* We don't assess expressions or predicates; assume incompatibility. */
+	/*
+	 * We don't assess expressions or predicates; assume incompatibility.
+	 * Also, if the index is invalid for any reason, treat it as incompatible.
+	 */
 	if (!(heap_attisnull(tuple, Anum_pg_index_indpred) &&
-		  heap_attisnull(tuple, Anum_pg_index_indexprs)))
+		  heap_attisnull(tuple, Anum_pg_index_indexprs) &&
+		  IndexIsValid(indexForm)))
 	{
 		ReleaseSysCache(tuple);
 		return false;
 	}
 
 	/* Any change in operator class or collation breaks compatibility. */
-	old_natts = ((Form_pg_index) GETSTRUCT(tuple))->indnatts;
+	old_natts = indexForm->indnatts;
 	Assert(old_natts == numberOfAttributes);
 
 	d = SysCacheGetAttr(INDEXRELID, tuple, Anum_pg_index_indcollation, &isnull);
@@ -314,15 +320,12 @@ DefineIndex(IndexStmt *stmt,
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
 	int			numberOfAttributes;
-	VirtualTransactionId *old_lockholders;
+	TransactionId limitXmin;
 	VirtualTransactionId *old_snapshots;
 	int			n_old_snapshots;
 	LockRelId	heaprelid;
 	LOCKTAG		heaplocktag;
 	Snapshot	snapshot;
-	Relation	pg_index;
-	HeapTuple	indexTuple;
-	Form_pg_index indexForm;
 	int			i;
 
 	/*
@@ -347,12 +350,13 @@ DefineIndex(IndexStmt *stmt,
 	 * (but not VACUUM).
 	 */
 	rel = heap_openrv(stmt->relation,
-					  (stmt->concurrent ? ShareUpdateExclusiveLock : ShareLock));
+				  (stmt->concurrent ? ShareUpdateExclusiveLock : ShareLock));
 
 	relationId = RelationGetRelid(rel);
 	namespaceId = RelationGetNamespace(rel);
 
-	if (rel->rd_rel->relkind != RELKIND_RELATION)
+	if (rel->rd_rel->relkind != RELKIND_RELATION &&
+		rel->rd_rel->relkind != RELKIND_MATVIEW)
 	{
 		if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 
@@ -367,7 +371,7 @@ DefineIndex(IndexStmt *stmt,
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is not a table",
+					 errmsg("\"%s\" is not a table or materialized view",
 							RelationGetRelationName(rel))));
 	}
 
@@ -596,7 +600,7 @@ DefineIndex(IndexStmt *stmt,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
 					 allowSystemTableMods,
 					 skip_build || stmt->concurrent,
-					 stmt->concurrent);
+					 stmt->concurrent, !check_rights);
 
 	/* Add any requested comment */
 	if (stmt->idxcomment != NULL)
@@ -647,30 +651,17 @@ DefineIndex(IndexStmt *stmt,
 	 * for an overview of how this works)
 	 *
 	 * Now we must wait until no running transaction could have the table open
-	 * with the old list of indexes.  To do this, inquire which xacts
-	 * currently would conflict with ShareLock on the table -- ie, which ones
-	 * have a lock that permits writing the table.	Then wait for each of
-	 * these xacts to commit or abort.	Note we do not need to worry about
-	 * xacts that open the table for writing after this point; they will see
-	 * the new index when they open it.
+	 * with the old list of indexes. Note we do not need to worry about xacts
+	 * that open the table for writing after this point; they will see the new
+	 * index when they open it.
 	 *
 	 * Note: the reason we use actual lock acquisition here, rather than just
 	 * checking the ProcArray and sleeping, is that deadlock is possible if
 	 * one of the transactions in question is blocked trying to acquire an
 	 * exclusive lock on our table.  The lock code will detect deadlock and
 	 * error out properly.
-	 *
-	 * Note: GetLockConflicts() never reports our own xid, hence we need not
-	 * check for that.	Also, prepared xacts are not reported, which is fine
-	 * since they certainly aren't going to do anything more.
 	 */
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForLockers(heaplocktag, ShareLock);
 
 	/*
 	 * At this moment we are sure that there are no transactions with the
@@ -717,23 +708,7 @@ DefineIndex(IndexStmt *stmt,
 	 * commit this transaction, any new transactions that open the table must
 	 * insert new entries into the index for insertions and non-HOT updates.
 	 */
-	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
-
-	indexTuple = SearchSysCacheCopy1(INDEXRELID,
-									 ObjectIdGetDatum(indexRelationId));
-	if (!HeapTupleIsValid(indexTuple))
-		elog(ERROR, "cache lookup failed for index %u", indexRelationId);
-	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
-
-	Assert(!indexForm->indisready);
-	Assert(!indexForm->indisvalid);
-
-	indexForm->indisready = true;
-
-	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-	CatalogUpdateIndexes(pg_index, indexTuple);
-
-	heap_close(pg_index, RowExclusiveLock);
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_READY);
 
 	/* we can do away with our snapshot */
 	PopActiveSnapshot();
@@ -750,13 +725,7 @@ DefineIndex(IndexStmt *stmt,
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
 	 */
-	old_lockholders = GetLockConflicts(&heaplocktag, ShareLock);
-
-	while (VirtualTransactionIdIsValid(*old_lockholders))
-	{
-		VirtualXactLock(*old_lockholders, true);
-		old_lockholders++;
-	}
+	WaitForLockers(heaplocktag, ShareLock);
 
 	/*
 	 * Now take the "reference snapshot" that will be used by validate_index()
@@ -780,6 +749,18 @@ DefineIndex(IndexStmt *stmt,
 	 * Scan the index and the heap, insert any missing index entries.
 	 */
 	validate_index(relationId, indexRelationId, snapshot);
+
+	/*
+	 * Drop the reference snapshot.  We must do this before waiting out other
+	 * snapshot holders, else we will deadlock against other processes also
+	 * doing CREATE INDEX CONCURRENTLY, which would see our snapshot as one
+	 * they must wait for.	But first, save the snapshot's xmin to use as
+	 * limitXmin for GetCurrentVirtualXIDs().
+	 */
+	limitXmin = snapshot->xmin;
+
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
 
 	/*
 	 * The index is now valid in the sense that it contains all currently
@@ -813,7 +794,7 @@ DefineIndex(IndexStmt *stmt,
 	 * GetCurrentVirtualXIDs.  If, during any iteration, a particular vxid
 	 * doesn't show up in the output, we know we can forget about it.
 	 */
-	old_snapshots = GetCurrentVirtualXIDs(snapshot->xmin, true, false,
+	old_snapshots = GetCurrentVirtualXIDs(limitXmin, true, false,
 										  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
 										  &n_old_snapshots);
 
@@ -830,7 +811,7 @@ DefineIndex(IndexStmt *stmt,
 			int			j;
 			int			k;
 
-			newer_snapshots = GetCurrentVirtualXIDs(snapshot->xmin,
+			newer_snapshots = GetCurrentVirtualXIDs(limitXmin,
 													true, false,
 										 PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
 													&n_newer_snapshots);
@@ -857,23 +838,7 @@ DefineIndex(IndexStmt *stmt,
 	/*
 	 * Index can now be marked valid -- update its pg_index entry
 	 */
-	pg_index = heap_open(IndexRelationId, RowExclusiveLock);
-
-	indexTuple = SearchSysCacheCopy1(INDEXRELID,
-									 ObjectIdGetDatum(indexRelationId));
-	if (!HeapTupleIsValid(indexTuple))
-		elog(ERROR, "cache lookup failed for index %u", indexRelationId);
-	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
-
-	Assert(indexForm->indisready);
-	Assert(!indexForm->indisvalid);
-
-	indexForm->indisvalid = true;
-
-	simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-	CatalogUpdateIndexes(pg_index, indexTuple);
-
-	heap_close(pg_index, RowExclusiveLock);
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_VALID);
 
 	/*
 	 * The pg_index update will cause backends (including this one) to update
@@ -881,15 +846,9 @@ DefineIndex(IndexStmt *stmt,
 	 * relcache inval on the parent table to force replanning of cached plans.
 	 * Otherwise existing sessions might fail to use the new index where it
 	 * would be useful.  (Note that our earlier commits did not create reasons
-	 * to replan; relcache flush on the index itself was sufficient.)
+	 * to replan; so relcache flush on the index itself was sufficient.)
 	 */
 	CacheInvalidateRelcacheByRelid(heaprelid.relId);
-
-	/* we can now do away with our active snapshot */
-	PopActiveSnapshot();
-
-	/* And we can remove the validating snapshot too */
-	UnregisterSnapshot(snapshot);
 
 	/*
 	 * Last thing to do is release the session-level lock on the parent table.
@@ -1293,7 +1252,7 @@ GetIndexOpClass(List *opclass, Oid attrType,
 		/* Look in specific schema only */
 		Oid			namespaceId;
 
-		namespaceId = LookupExplicitNamespace(schemaname);
+		namespaceId = LookupExplicitNamespace(schemaname, false);
 		tuple = SearchSysCache3(CLAAMNAMENSP,
 								ObjectIdGetDatum(accessMethodId),
 								PointerGetDatum(opcname),
@@ -1379,7 +1338,7 @@ GetDefaultOpClass(Oid type_id, Oid am_id)
 				ObjectIdGetDatum(am_id));
 
 	scan = systable_beginscan(rel, OpclassAmNameNspIndexId, true,
-							  SnapshotNow, 1, skey);
+							  NULL, 1, skey);
 
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
@@ -1700,7 +1659,7 @@ ChooseIndexColumnNames(List *indexElems)
  * ReindexIndex
  *		Recreate a specific index.
  */
-void
+Oid
 ReindexIndex(RangeVar *indexRelation)
 {
 	Oid			indOid;
@@ -1713,6 +1672,8 @@ ReindexIndex(RangeVar *indexRelation)
 									  (void *) &heapOid);
 
 	reindex_index(indOid, false);
+
+	return indOid;
 }
 
 /*
@@ -1778,7 +1739,7 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
  * ReindexTable
  *		Recreate all indexes of a table (and of its toast table, if any)
  */
-void
+Oid
 ReindexTable(RangeVar *relation)
 {
 	Oid			heapOid;
@@ -1787,10 +1748,14 @@ ReindexTable(RangeVar *relation)
 	heapOid = RangeVarGetRelidExtended(relation, ShareLock, false, false,
 									   RangeVarCallbackOwnsTable, NULL);
 
-	if (!reindex_relation(heapOid, REINDEX_REL_PROCESS_TOAST))
+	if (!reindex_relation(heapOid,
+						  REINDEX_REL_PROCESS_TOAST |
+						  REINDEX_REL_CHECK_CONSTRAINTS))
 		ereport(NOTICE,
 				(errmsg("table \"%s\" has no indexes",
 						relation->relname)));
+
+	return heapOid;
 }
 
 /*
@@ -1801,7 +1766,7 @@ ReindexTable(RangeVar *relation)
  * separate transaction, so we can release the lock on it right away.
  * That means this must not be called within a user transaction block!
  */
-void
+Oid
 ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
 {
 	Relation	relationRelation;
@@ -1851,16 +1816,17 @@ ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
 	/*
 	 * Scan pg_class to build a list of the relations we need to reindex.
 	 *
-	 * We only consider plain relations here (toast rels will be processed
-	 * indirectly by reindex_relation).
+	 * We only consider plain relations and materialized views here (toast
+	 * rels will be processed indirectly by reindex_relation).
 	 */
 	relationRelation = heap_open(RelationRelationId, AccessShareLock);
-	scan = heap_beginscan(relationRelation, SnapshotNow, 0, NULL);
+	scan = heap_beginscan_catalog(relationRelation, 0, NULL);
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Form_pg_class classtuple = (Form_pg_class) GETSTRUCT(tuple);
 
-		if (classtuple->relkind != RELKIND_RELATION)
+		if (classtuple->relkind != RELKIND_RELATION &&
+			classtuple->relkind != RELKIND_MATVIEW)
 			continue;
 
 		/* Skip temp tables of other backends; we can't reindex them at all */
@@ -1900,7 +1866,9 @@ ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
 		StartTransactionCommand();
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		if (reindex_relation(relid, REINDEX_REL_PROCESS_TOAST))
+		if (reindex_relation(relid,
+							 REINDEX_REL_PROCESS_TOAST |
+							 REINDEX_REL_CHECK_CONSTRAINTS))
 			ereport(NOTICE,
 					(errmsg("table \"%s.%s\" was reindexed",
 							get_namespace_name(get_rel_namespace(relid)),
@@ -1911,4 +1879,6 @@ ReindexDatabase(const char *databaseName, bool do_system, bool do_user)
 	StartTransactionCommand();
 
 	MemoryContextDelete(private_context);
+
+	return MyDatabaseId;
 }

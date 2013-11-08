@@ -148,6 +148,7 @@
 typedef short color;			/* colors of characters */
 typedef int pcolor;				/* what color promotes to */
 
+#define MAX_COLOR	32767		/* max color (must fit in 'color' datatype) */
 #define COLORLESS	(-1)		/* impossible color */
 #define WHITE		0			/* default color, parent of all others */
 
@@ -330,8 +331,8 @@ struct nfa
 	color		bos[2];			/* colors, if any, assigned to BOS and BOL */
 	color		eos[2];			/* colors, if any, assigned to EOS and EOL */
 	size_t		size;			/* Current NFA size; differs from nstates as
-								 * it also counts the number of states created
-								 * by children of this state. */
+								 * it also counts the number of states in
+								 * children of this NFA. */
 	struct vars *v;				/* simplifies compile error reporting */
 	struct nfa *parent;			/* parent NFA, if any */
 };

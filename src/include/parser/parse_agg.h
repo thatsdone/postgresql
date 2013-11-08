@@ -3,7 +3,7 @@
  * parse_agg.h
  *	  handle aggregates and window functions in parser
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/parser/parse_agg.h
@@ -25,6 +25,7 @@ extern void parseCheckAggregates(ParseState *pstate, Query *qry);
 
 extern void build_aggregate_fnexprs(Oid *agg_input_types,
 						int agg_num_inputs,
+						bool agg_variadic,
 						Oid agg_state_type,
 						Oid agg_result_type,
 						Oid agg_input_collation,

@@ -8,7 +8,7 @@
  *
  * This code is released under the terms of the PostgreSQL License.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/test/regress/pg_regress.c
@@ -654,9 +654,9 @@ get_expectfile(const char *testname, const char *file)
 static void
 doputenv(const char *var, const char *val)
 {
-	char	   *s = malloc(strlen(var) + strlen(val) + 2);
+	char	   *s;
 
-	sprintf(s, "%s=%s", var, val);
+	s = psprintf("%s=%s", var, val);
 	putenv(s);
 }
 
@@ -673,14 +673,11 @@ add_to_path(const char *pathname, char separator, const char *addval)
 	if (!oldval || !oldval[0])
 	{
 		/* no previous value */
-		newval = malloc(strlen(pathname) + strlen(addval) + 2);
-		sprintf(newval, "%s=%s", pathname, addval);
+		newval = psprintf("%s=%s", pathname, addval);
 	}
 	else
-	{
-		newval = malloc(strlen(pathname) + strlen(addval) + strlen(oldval) + 3);
-		sprintf(newval, "%s=%s%c%s", pathname, addval, separator, oldval);
-	}
+		newval = psprintf("%s=%s%c%s", pathname, addval, separator, oldval);
+
 	putenv(newval);
 }
 
@@ -690,8 +687,6 @@ add_to_path(const char *pathname, char separator, const char *addval)
 static void
 initialize_environment(void)
 {
-	char	   *tmp;
-
 	putenv("PGAPPNAME=pg_regress");
 
 	if (nolocale)
@@ -747,8 +742,8 @@ initialize_environment(void)
 
 		if (!old_pgoptions)
 			old_pgoptions = "";
-		new_pgoptions = malloc(strlen(old_pgoptions) + strlen(my_pgoptions) + 12);
-		sprintf(new_pgoptions, "PGOPTIONS=%s %s", old_pgoptions, my_pgoptions);
+		new_pgoptions = psprintf("PGOPTIONS=%s %s",
+								 old_pgoptions, my_pgoptions);
 		putenv(new_pgoptions);
 	}
 
@@ -783,19 +778,26 @@ initialize_environment(void)
 		}
 
 		/*
+		 * GNU make stores some flags in the MAKEFLAGS environment variable to
+		 * pass arguments to its own children.	If we are invoked by make,
+		 * that causes the make invoked by us to think its part of the make
+		 * task invoking us, and so it tries to communicate with the toplevel
+		 * make.  Which fails.
+		 *
+		 * Unset the variable to protect against such problems.  We also reset
+		 * MAKELEVEL to be certain the child doesn't notice the make above us.
+		 */
+		unsetenv("MAKEFLAGS");
+		unsetenv("MAKELEVEL");
+
+		/*
 		 * Adjust path variables to point into the temp-install tree
 		 */
-		tmp = malloc(strlen(temp_install) + 32 + strlen(bindir));
-		sprintf(tmp, "%s/install/%s", temp_install, bindir);
-		bindir = tmp;
+		bindir = psprintf("%s/install/%s", temp_install, bindir);
 
-		tmp = malloc(strlen(temp_install) + 32 + strlen(libdir));
-		sprintf(tmp, "%s/install/%s", temp_install, libdir);
-		libdir = tmp;
+		libdir = psprintf("%s/install/%s", temp_install, libdir);
 
-		tmp = malloc(strlen(temp_install) + 32 + strlen(datadir));
-		sprintf(tmp, "%s/install/%s", temp_install, datadir);
-		datadir = tmp;
+		datadir = psprintf("%s/install/%s", temp_install, datadir);
 
 		/* psql will be installed into temp-install bindir */
 		psqldir = bindir;
@@ -948,9 +950,9 @@ spawn_process(const char *cmdline)
 		 * "exec" the command too.	This saves two useless processes per
 		 * parallel test case.
 		 */
-		char	   *cmdline2 = malloc(strlen(cmdline) + 6);
+		char	   *cmdline2;
 
-		sprintf(cmdline2, "exec %s", cmdline);
+		cmdline2 = psprintf("exec %s", cmdline);
 		execl(shellprog, shellprog, "-c", cmdline2, (char *) NULL);
 		fprintf(stderr, _("%s: could not exec \"%s\": %s\n"),
 				progname, shellprog, strerror(errno));
@@ -1027,8 +1029,7 @@ spawn_process(const char *cmdline)
 		exit(2);
 	}
 
-	cmdline2 = malloc(strlen(cmdline) + 8);
-	sprintf(cmdline2, "cmd /c %s", cmdline);
+	cmdline2 = psprintf("cmd /c %s", cmdline);
 
 #ifndef __CYGWIN__
 	AddUserToTokenDacl(restrictedToken);
@@ -1849,8 +1850,7 @@ make_absolute_path(const char *in)
 			}
 		}
 
-		result = malloc(strlen(cwdbuf) + strlen(in) + 2);
-		sprintf(result, "%s/%s", cwdbuf, in);
+		result = psprintf("%s/%s", cwdbuf, in);
 	}
 
 	canonicalize_path(result);
@@ -1906,13 +1906,6 @@ help(void)
 int
 regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc)
 {
-	_stringlist *sl;
-	int			c;
-	int			i;
-	int			option_index;
-	char		buf[MAXPGPATH * 4];
-	char		buf2[MAXPGPATH * 4];
-
 	static struct option long_options[] = {
 		{"help", no_argument, NULL, 'h'},
 		{"version", no_argument, NULL, 'V'},
@@ -1941,6 +1934,13 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		{NULL, 0, NULL, 0}
 	};
 
+	_stringlist *sl;
+	int			c;
+	int			i;
+	int			option_index;
+	char		buf[MAXPGPATH * 4];
+	char		buf2[MAXPGPATH * 4];
+
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_regress"));
 
@@ -1956,6 +1956,9 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 	 * default parameters and let them be overwritten by the commandline.
 	 */
 	ifunc();
+
+	if (getenv("PG_REGRESS_DIFF_OPTS"))
+		pretty_diff_opts = getenv("PG_REGRESS_DIFF_OPTS");
 
 	while ((c = getopt_long(argc, argv, "hV", long_options, &option_index)) != -1)
 	{

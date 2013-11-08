@@ -5,7 +5,7 @@
  *	  along with the relation's initial contents.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_opfamily.h
@@ -96,6 +96,7 @@ DATA(insert OID = 1990 (	405		oid_ops			PGNSP PGUID ));
 DATA(insert OID = 1991 (	403		oidvector_ops	PGNSP PGUID ));
 DATA(insert OID = 1992 (	405		oidvector_ops	PGNSP PGUID ));
 DATA(insert OID = 2994 (	403		record_ops		PGNSP PGUID ));
+DATA(insert OID = 3194 (	403		record_image_ops	PGNSP PGUID ));
 DATA(insert OID = 1994 (	403		text_ops		PGNSP PGUID ));
 #define TEXT_BTREE_FAM_OID 1994
 DATA(insert OID = 1995 (	405		text_ops		PGNSP PGUID ));

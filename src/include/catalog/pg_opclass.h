@@ -25,7 +25,7 @@
  * AMs support this.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_opclass.h
@@ -143,6 +143,7 @@ DATA(insert (	405		oid_ops				PGNSP PGUID 1990   26 t 0 ));
 DATA(insert (	403		oidvector_ops		PGNSP PGUID 1991   30 t 0 ));
 DATA(insert (	405		oidvector_ops		PGNSP PGUID 1992   30 t 0 ));
 DATA(insert (	403		record_ops			PGNSP PGUID 2994 2249 t 0 ));
+DATA(insert (	403		record_image_ops	PGNSP PGUID 3194 2249 f 0 ));
 DATA(insert OID = 3126 ( 403	text_ops	PGNSP PGUID 1994   25 t 0 ));
 #define TEXT_BTREE_OPS_OID 3126
 DATA(insert (	405		text_ops			PGNSP PGUID 1995   25 t 0 ));

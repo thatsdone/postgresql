@@ -711,6 +711,8 @@ where thousand = (q1 + q2);
 -- test placement of movable quals in a parameterized join tree
 --
 
+set effective_cache_size = '128MB';
+
 explain (costs off)
 select * from tenk1 t1 left join
   (tenk1 t2 join tenk1 t3 on t2.thousand = t3.unique2)
@@ -748,6 +750,55 @@ select b.unique1 from
   join int4_tbl i1 on b.thousand = f1
   right join int4_tbl i2 on i2.f1 = b.tenthous
   order by 1;
+
+explain (costs off)
+select * from
+(
+  select unique1, q1, coalesce(unique1, -1) + q1 as fault
+  from int8_tbl left join tenk1 on (q2 = unique2)
+) ss
+where fault = 122
+order by fault;
+
+select * from
+(
+  select unique1, q1, coalesce(unique1, -1) + q1 as fault
+  from int8_tbl left join tenk1 on (q2 = unique2)
+) ss
+where fault = 122
+order by fault;
+
+--
+-- test handling of potential equivalence clauses above outer joins
+--
+
+explain (costs off)
+select q1, unique2, thousand, hundred
+  from int8_tbl a left join tenk1 b on q1 = unique2
+  where coalesce(thousand,123) = q1 and q1 = coalesce(hundred,123);
+
+select q1, unique2, thousand, hundred
+  from int8_tbl a left join tenk1 b on q1 = unique2
+  where coalesce(thousand,123) = q1 and q1 = coalesce(hundred,123);
+
+explain (costs off)
+select f1, unique2, case when unique2 is null then f1 else 0 end
+  from int4_tbl a left join tenk1 b on f1 = unique2
+  where (case when unique2 is null then f1 else 0 end) = 0;
+
+select f1, unique2, case when unique2 is null then f1 else 0 end
+  from int4_tbl a left join tenk1 b on f1 = unique2
+  where (case when unique2 is null then f1 else 0 end) = 0;
+
+--
+-- test ability to push constants through outer join clauses
+--
+
+explain (costs off)
+  select * from int4_tbl a left join tenk1 b on f1 = unique2 where f1 = 0;
+
+explain (costs off)
+  select * from tenk1 a full join tenk1 b using(unique2) where unique2 = 42;
 
 --
 -- test join removal
@@ -859,22 +910,25 @@ explain (costs off)
   select unique2, x.*
   from int4_tbl x cross join lateral (select unique2 from tenk1 where f1 = unique1) ss;
 select unique2, x.*
-from int4_tbl x left join lateral (select unique1, unique2 from tenk1 where f1 = unique1) ss on f1 = unique1;
+from int4_tbl x left join lateral (select unique1, unique2 from tenk1 where f1 = unique1) ss on true;
 explain (costs off)
   select unique2, x.*
-  from int4_tbl x left join lateral (select unique1, unique2 from tenk1 where f1 = unique1) ss on f1 = unique1;
+  from int4_tbl x left join lateral (select unique1, unique2 from tenk1 where f1 = unique1) ss on true;
 
 -- check scoping of lateral versus parent references
 -- the first of these should return int8_tbl.q2, the second int8_tbl.q1
 select *, (select r from (select q1 as q2) x, (select q2 as r) y) from int8_tbl;
 select *, (select r from (select q1 as q2) x, lateral (select q2 as r) y) from int8_tbl;
 
--- lateral SRF
+-- lateral with function in FROM
 select count(*) from tenk1 a, lateral generate_series(1,two) g;
 explain (costs off)
   select count(*) from tenk1 a, lateral generate_series(1,two) g;
 explain (costs off)
   select count(*) from tenk1 a cross join lateral generate_series(1,two) g;
+-- don't need the explicit LATERAL keyword for functions
+explain (costs off)
+  select count(*) from tenk1 a, generate_series(1,two) g;
 
 -- lateral with UNION ALL subselect
 explain (costs off)
@@ -943,6 +997,56 @@ select v.* from
   left join int4_tbl z on z.f1 = x.q2,
   lateral (select x.q1,y.q1 from dual union all select x.q2,y.q2 from dual) v(vx,vy);
 
+explain (verbose, costs off)
+select * from
+  int8_tbl a left join
+  lateral (select *, a.q2 as x from int8_tbl b) ss on a.q2 = ss.q1;
+select * from
+  int8_tbl a left join
+  lateral (select *, a.q2 as x from int8_tbl b) ss on a.q2 = ss.q1;
+explain (verbose, costs off)
+select * from
+  int8_tbl a left join
+  lateral (select *, coalesce(a.q2, 42) as x from int8_tbl b) ss on a.q2 = ss.q1;
+select * from
+  int8_tbl a left join
+  lateral (select *, coalesce(a.q2, 42) as x from int8_tbl b) ss on a.q2 = ss.q1;
+
+-- lateral can result in join conditions appearing below their
+-- real semantic level
+explain (verbose, costs off)
+select * from int4_tbl i left join
+  lateral (select * from int2_tbl j where i.f1 = j.f1) k on true;
+select * from int4_tbl i left join
+  lateral (select * from int2_tbl j where i.f1 = j.f1) k on true;
+explain (verbose, costs off)
+select * from int4_tbl i left join
+  lateral (select coalesce(i) from int2_tbl j where i.f1 = j.f1) k on true;
+select * from int4_tbl i left join
+  lateral (select coalesce(i) from int2_tbl j where i.f1 = j.f1) k on true;
+explain (verbose, costs off)
+select * from int4_tbl a,
+  lateral (
+    select * from int4_tbl b left join int8_tbl c on (b.f1 = q1 and a.f1 = q2)
+  ) ss;
+select * from int4_tbl a,
+  lateral (
+    select * from int4_tbl b left join int8_tbl c on (b.f1 = q1 and a.f1 = q2)
+  ) ss;
+
+-- lateral reference in a PlaceHolderVar evaluated at join level
+explain (verbose, costs off)
+select * from
+  int8_tbl a left join lateral
+  (select b.q1 as bq1, c.q1 as cq1, least(a.q1,b.q1,c.q1) from
+   int8_tbl b cross join int8_tbl c) ss
+  on a.q2 = ss.bq1;
+select * from
+  int8_tbl a left join lateral
+  (select b.q1 as bq1, c.q1 as cq1, least(a.q1,b.q1,c.q1) from
+   int8_tbl b cross join int8_tbl c) ss
+  on a.q2 = ss.bq1;
+
 -- case requiring nested PlaceHolderVars
 explain (verbose, costs off)
 select * from
@@ -954,11 +1058,24 @@ select * from
   ) on c.q2 = ss2.q1,
   lateral (select ss2.y) ss3;
 
+-- case that breaks the old ph_may_need optimization
+explain (verbose, costs off)
+select c.*,a.*,ss1.q1,ss2.q1,ss3.* from
+  int8_tbl c left join (
+    int8_tbl a left join
+      (select q1, coalesce(q2,f1) as x from int8_tbl b, int4_tbl b2
+       where q1 < f1) ss1
+      on a.q2 = ss1.q1
+    cross join
+    lateral (select q1, coalesce(ss1.x,q2) as y from int8_tbl d) ss2
+  ) on c.q2 = ss2.q1,
+  lateral (select * from int4_tbl i where ss2.y > f1) ss3;
+
 -- test some error cases where LATERAL should have been used but wasn't
-select f1,g from int4_tbl a, generate_series(0, f1) g;
-select f1,g from int4_tbl a, generate_series(0, a.f1) g;
-select f1,g from int4_tbl a cross join generate_series(0, f1) g;
-select f1,g from int4_tbl a cross join generate_series(0, a.f1) g;
+select f1,g from int4_tbl a, (select f1 as g) ss;
+select f1,g from int4_tbl a, (select a.f1 as g) ss;
+select f1,g from int4_tbl a cross join (select f1 as g) ss;
+select f1,g from int4_tbl a cross join (select a.f1 as g) ss;
 -- SQL:2008 says the left table is in scope but illegal to access here
 select f1,g from int4_tbl a right join lateral generate_series(0, a.f1) g on true;
 select f1,g from int4_tbl a full join lateral generate_series(0, a.f1) g on true;

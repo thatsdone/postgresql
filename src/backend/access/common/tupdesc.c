@@ -3,7 +3,7 @@
  * tupdesc.c
  *	  POSTGRES tuple descriptor support code
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -153,6 +153,40 @@ CreateTupleDescCopy(TupleDesc tupdesc)
 
 	desc->tdtypeid = tupdesc->tdtypeid;
 	desc->tdtypmod = tupdesc->tdtypmod;
+
+	return desc;
+}
+
+/*
+ * CreateTupleDescCopyExtend
+ *		This function creates a new TupleDesc by copying from an existing
+ *		TupleDesc, but adding space for more columns. The new tupdesc is
+ *      not regarded as the same record type as the old one (and therefore
+ *      does not inherit its typeid/typmod, which instead are left as an
+ *      anonymous record type).
+ *
+ *      The additional column slots are not initialized in any way;
+ *      callers must do their own TupleDescInitEntry on each.
+ *
+ * !!! Constraints and defaults are not copied !!!
+ */
+TupleDesc
+CreateTupleDescCopyExtend(TupleDesc tupdesc, int moreatts)
+{
+	TupleDesc	desc;
+	int			i;
+	int         src_natts = tupdesc->natts;
+
+	Assert(moreatts >= 0);
+
+	desc = CreateTemplateTupleDesc(src_natts + moreatts, tupdesc->tdhasoid);
+
+	for (i = 0; i < src_natts; i++)
+	{
+		memcpy(desc->attrs[i], tupdesc->attrs[i], ATTRIBUTE_FIXED_PART_SIZE);
+		desc->attrs[i]->attnotnull = false;
+		desc->attrs[i]->atthasdef = false;
+	}
 
 	return desc;
 }
@@ -434,6 +468,12 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
  *		This function initializes a single attribute structure in
  *		a previously allocated tuple descriptor.
  *
+ * If attributeName is NULL, the attname field is set to an empty string
+ * (this is for cases where we don't know or need a name for the field).
+ * Also, some callers use this function to change the datatype-related fields
+ * in an existing tupdesc; they pass attributeName = NameStr(att->attname)
+ * to indicate that the attname field shouldn't be modified.
+ *
  * Note that attcollation is set to the default for the specified datatype.
  * If a nondefault collation is needed, insert it afterwards using
  * TupleDescInitEntryCollation.
@@ -467,12 +507,12 @@ TupleDescInitEntry(TupleDesc desc,
 	/*
 	 * Note: attributeName can be NULL, because the planner doesn't always
 	 * fill in valid resname values in targetlists, particularly for resjunk
-	 * attributes.
+	 * attributes. Also, do nothing if caller wants to re-use the old attname.
 	 */
-	if (attributeName != NULL)
-		namestrcpy(&(att->attname), attributeName);
-	else
+	if (attributeName == NULL)
 		MemSet(NameStr(att->attname), 0, NAMEDATALEN);
+	else if (attributeName != NameStr(att->attname))
+		namestrcpy(&(att->attname), attributeName);
 
 	att->attstattarget = -1;
 	att->attcacheoff = -1;

@@ -50,6 +50,7 @@
 <!ENTITY wal           SYSTEM "wal.sgml">
 
 <!-- programmer's guide -->
+<!ENTITY bgworker   SYSTEM "bgworker.sgml">
 <!ENTITY dfunc      SYSTEM "dfunc.sgml">
 <!ENTITY ecpg       SYSTEM "ecpg.sgml">
 <!ENTITY extend     SYSTEM "extend.sgml">
@@ -133,6 +134,8 @@
 <!ENTITY pgtesttiming    SYSTEM "pgtesttiming.sgml">
 <!ENTITY pgtrgm          SYSTEM "pgtrgm.sgml">
 <!ENTITY pgupgrade       SYSTEM "pgupgrade.sgml">
+<!ENTITY pgxlogdump      SYSTEM "pg_xlogdump.sgml">
+<!ENTITY postgres-fdw    SYSTEM "postgres-fdw.sgml">
 <!ENTITY seg             SYSTEM "seg.sgml">
 <!ENTITY contrib-spi     SYSTEM "contrib-spi.sgml">
 <!ENTITY sepgsql         SYSTEM "sepgsql.sgml">
@@ -156,6 +159,7 @@
 <!ENTITY sourcerepo SYSTEM "sourcerepo.sgml">
 
 <!ENTITY release    SYSTEM "release.sgml">
+<!ENTITY release-9.3    SYSTEM "release-9.3.sgml">
 <!ENTITY release-9.2    SYSTEM "release-9.2.sgml">
 <!ENTITY release-9.1    SYSTEM "release-9.1.sgml">
 <!ENTITY release-9.0    SYSTEM "release-9.0.sgml">
@@ -192,3 +196,8 @@
  to include it.
  -->
 <!ENTITY % include-index "IGNORE">
+
+<!--
+ Create empty index element for processing by XSLT stylesheet.
+ -->
+<!ENTITY % include-xslt-index "IGNORE">

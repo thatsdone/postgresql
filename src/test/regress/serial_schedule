@@ -23,6 +23,7 @@ test: strings
 test: numerology
 test: point
 test: lseg
+test: line
 test: box
 test: path
 test: polygon
@@ -51,7 +52,6 @@ test: create_function_1
 test: create_type
 test: create_table
 test: create_function_2
-test: create_function_3
 test: copy
 test: copyselect
 test: create_misc
@@ -59,6 +59,7 @@ test: create_operator
 test: create_index
 test: create_view
 test: create_aggregate
+test: create_function_3
 test: create_cast
 test: constraints
 test: triggers
@@ -67,6 +68,7 @@ test: create_table_like
 test: typed_table
 test: vacuum
 test: drop_if_exists
+test: updatable_views
 test: sanity_check
 test: errors
 test: select
@@ -94,7 +96,12 @@ test: prepared_xacts
 test: privileges
 test: security_label
 test: collate
+test: matview
+test: lock
+test: alter_generic
 test: misc
+test: psql
+test: async
 test: rules
 test: event_trigger
 test: select_views
@@ -113,6 +120,7 @@ test: xmlmap
 test: functional_deps
 test: advisory_lock
 test: json
+test: indirect_toast
 test: plancache
 test: limit
 test: plpgsql

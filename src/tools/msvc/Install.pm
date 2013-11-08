@@ -37,9 +37,18 @@ sub Install
 	$| = 1;
 
 	my $target = shift;
-	our $config;
-	require "config_default.pl";
-	require "config.pl" if (-f "config.pl");
+
+	# if called from vcregress, the config will be passed to us
+	# so no need to re-include these
+	our $config = shift;
+	unless ($config)
+	{
+
+		# suppress warning about harmless redeclaration of $config
+		no warnings 'misc';
+		require "config_default.pl";
+		require "config.pl" if (-f "config.pl");
+	}
 
 	chdir("../../..")    if (-f "../../../configure");
 	chdir("../../../..") if (-f "../../../../configure");
@@ -76,10 +85,16 @@ sub Install
 		"src");
 	CopySetOfFiles('config files', $sample_files, $target . '/share/');
 	CopyFiles(
-		'Import libraries', $target . '/lib/',
-		"$conf\\",          "postgres\\postgres.lib",
-		"libpq\\libpq.lib", "libecpg\\libecpg.lib",
-		"libpgport\\libpgport.lib");
+		'Import libraries',
+		$target . '/lib/',
+		"$conf\\",
+		"postgres\\postgres.lib",
+		"libpq\\libpq.lib",
+		"libecpg\\libecpg.lib",
+		"libpgcommon\\libpgcommon.lib",
+		"libpgport\\libpgport.lib",
+		"libpgtypes\\libpgtypes.lib",
+		"libecpg_compat\\libecpg_compat.lib");
 	CopySetOfFiles(
 		'timezone names',
 		[ glob('src\timezone\tznames\*.txt') ],
@@ -481,10 +496,10 @@ sub CopyIncludeFiles
 		'include/internal/libpq', 'include/server', 'include/server/parser');
 
 	CopyFiles(
-		'Public headers',
-		$target . '/include/',
-		'src/include/', 'postgres_ext.h', 'pg_config.h', 'pg_config_os.h',
-		'pg_config_manual.h');
+		'Public headers', $target . '/include/',
+		'src/include/',   'postgres_ext.h',
+		'pg_config.h',    'pg_config_ext.h',
+		'pg_config_os.h', 'pg_config_manual.h');
 	lcopy('src/include/libpq/libpq-fs.h', $target . '/include/libpq/')
 	  || croak 'Could not copy libpq-fs.h';
 
@@ -507,7 +522,7 @@ sub CopyIncludeFiles
 	CopyFiles(
 		'Server headers',
 		$target . '/include/server/',
-		'src/include/', 'pg_config.h', 'pg_config_os.h');
+		'src/include/', 'pg_config.h', 'pg_config_ext.h', 'pg_config_os.h');
 	CopyFiles(
 		'Grammar header',
 		$target . '/include/server/parser/',

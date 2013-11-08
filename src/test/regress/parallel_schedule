@@ -23,7 +23,7 @@ test: numerology
 # ----------
 # The second group of parallel tests
 # ----------
-test: point lseg box path polygon circle date time timetz timestamp timestamptz interval abstime reltime tinterval inet macaddr tstypes comments
+test: point lseg line box path polygon circle date time timetz timestamp timestamptz interval abstime reltime tinterval inet macaddr tstypes comments
 
 # ----------
 # Another group of parallel tests
@@ -59,7 +59,7 @@ test: create_index create_view
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_aggregate create_function_3 create_cast constraints triggers inherit create_table_like typed_table vacuum drop_if_exists
+test: create_aggregate create_function_3 create_cast constraints triggers inherit create_table_like typed_table vacuum drop_if_exists updatable_views
 
 # ----------
 # sanity_check does a vacuum, affecting the sort order of SELECT *
@@ -83,9 +83,13 @@ test: select_into select_distinct select_distinct_on select_implicit select_havi
 # ----------
 # Another group of parallel tests
 # ----------
-test: privileges security_label collate
+test: privileges security_label collate matview lock
 
-test: misc
+# ----------
+# Another group of parallel tests
+# ----------
+test: alter_generic misc psql async
+
 # rules cannot run concurrently with any test that creates a view
 test: rules
 # event triggers cannot run concurrently with any test that runs DDL
@@ -94,7 +98,7 @@ test: event_trigger
 # ----------
 # Another group of parallel tests
 # ----------
-test: select_views portals_p2 foreign_key cluster dependency guc bitmapops combocid tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock json
+test: select_views portals_p2 foreign_key cluster dependency guc bitmapops combocid tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock json indirect_toast
 
 # ----------
 # Another group of parallel tests

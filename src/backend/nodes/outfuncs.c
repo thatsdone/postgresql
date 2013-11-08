@@ -3,7 +3,7 @@
  * outfuncs.c
  *	  Output functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -332,7 +332,9 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_INT_FIELD(resultRelIndex);
 	WRITE_NODE_FIELD(plans);
+	WRITE_NODE_FIELD(withCheckOptionLists);
 	WRITE_NODE_FIELD(returningLists);
+	WRITE_NODE_FIELD(fdwPrivLists);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_INT_FIELD(epqParam);
 }
@@ -519,6 +521,7 @@ _outFunctionScan(StringInfo str, const FunctionScan *node)
 	WRITE_NODE_FIELD(funccoltypes);
 	WRITE_NODE_FIELD(funccoltypmods);
 	WRITE_NODE_FIELD(funccolcollations);
+	WRITE_BOOL_FIELD(funcordinality);
 }
 
 static void
@@ -892,6 +895,7 @@ _outIntoClause(StringInfo str, const IntoClause *node)
 	WRITE_NODE_FIELD(options);
 	WRITE_ENUM_FIELD(onCommit, OnCommitAction);
 	WRITE_STRING_FIELD(tableSpaceName);
+	WRITE_NODE_FIELD(viewQuery);
 	WRITE_BOOL_FIELD(skipData);
 }
 
@@ -956,7 +960,9 @@ _outAggref(StringInfo str, const Aggref *node)
 	WRITE_NODE_FIELD(args);
 	WRITE_NODE_FIELD(aggorder);
 	WRITE_NODE_FIELD(aggdistinct);
+	WRITE_NODE_FIELD(aggfilter);
 	WRITE_BOOL_FIELD(aggstar);
+	WRITE_BOOL_FIELD(aggvariadic);
 	WRITE_UINT_FIELD(agglevelsup);
 	WRITE_LOCATION_FIELD(location);
 }
@@ -971,6 +977,7 @@ _outWindowFunc(StringInfo str, const WindowFunc *node)
 	WRITE_OID_FIELD(wincollid);
 	WRITE_OID_FIELD(inputcollid);
 	WRITE_NODE_FIELD(args);
+	WRITE_NODE_FIELD(aggfilter);
 	WRITE_UINT_FIELD(winref);
 	WRITE_BOOL_FIELD(winstar);
 	WRITE_BOOL_FIELD(winagg);
@@ -1000,6 +1007,7 @@ _outFuncExpr(StringInfo str, const FuncExpr *node)
 	WRITE_OID_FIELD(funcid);
 	WRITE_OID_FIELD(funcresulttype);
 	WRITE_BOOL_FIELD(funcretset);
+	WRITE_BOOL_FIELD(funcvariadic);
 	WRITE_ENUM_FIELD(funcformat, CoercionForm);
 	WRITE_OID_FIELD(funccollid);
 	WRITE_OID_FIELD(inputcollid);
@@ -1749,6 +1757,7 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_INT_FIELD(max_attr);
 	WRITE_NODE_FIELD(lateral_vars);
 	WRITE_BITMAPSET_FIELD(lateral_relids);
+	WRITE_BITMAPSET_FIELD(lateral_referencers);
 	WRITE_NODE_FIELD(indexlist);
 	WRITE_UINT_FIELD(pages);
 	WRITE_FLOAT_FIELD(tuples, "%.0f");
@@ -1772,7 +1781,9 @@ _outIndexOptInfo(StringInfo str, const IndexOptInfo *node)
 	/* Do NOT print rel field, else infinite recursion */
 	WRITE_UINT_FIELD(pages);
 	WRITE_FLOAT_FIELD(tuples, "%.0f");
+	WRITE_INT_FIELD(tree_height);
 	WRITE_INT_FIELD(ncolumns);
+	/* array fields aren't really worth the trouble to print */
 	WRITE_OID_FIELD(relam);
 	/* indexprs is redundant since we print indextlist */
 	WRITE_NODE_FIELD(indpred);
@@ -1781,6 +1792,7 @@ _outIndexOptInfo(StringInfo str, const IndexOptInfo *node)
 	WRITE_BOOL_FIELD(unique);
 	WRITE_BOOL_FIELD(immediate);
 	WRITE_BOOL_FIELD(hypothetical);
+	/* we don't bother with fields copied from the pg_am entry */
 }
 
 static void
@@ -1815,6 +1827,7 @@ _outEquivalenceMember(StringInfo str, const EquivalenceMember *node)
 
 	WRITE_NODE_FIELD(em_expr);
 	WRITE_BITMAPSET_FIELD(em_relids);
+	WRITE_BITMAPSET_FIELD(em_nullable_relids);
 	WRITE_BOOL_FIELD(em_is_const);
 	WRITE_BOOL_FIELD(em_is_child);
 	WRITE_OID_FIELD(em_datatype);
@@ -1902,8 +1915,8 @@ _outLateralJoinInfo(StringInfo str, const LateralJoinInfo *node)
 {
 	WRITE_NODE_TYPE("LATERALJOININFO");
 
-	WRITE_UINT_FIELD(lateral_rhs);
 	WRITE_BITMAPSET_FIELD(lateral_lhs);
+	WRITE_BITMAPSET_FIELD(lateral_rhs);
 }
 
 static void
@@ -1927,8 +1940,8 @@ _outPlaceHolderInfo(StringInfo str, const PlaceHolderInfo *node)
 	WRITE_UINT_FIELD(phid);
 	WRITE_NODE_FIELD(ph_var);
 	WRITE_BITMAPSET_FIELD(ph_eval_at);
+	WRITE_BITMAPSET_FIELD(ph_lateral);
 	WRITE_BITMAPSET_FIELD(ph_needed);
-	WRITE_BITMAPSET_FIELD(ph_may_need);
 	WRITE_INT_FIELD(ph_width);
 }
 
@@ -2073,6 +2086,7 @@ _outFuncCall(StringInfo str, const FuncCall *node)
 	WRITE_NODE_FIELD(funcname);
 	WRITE_NODE_FIELD(args);
 	WRITE_NODE_FIELD(agg_order);
+	WRITE_NODE_FIELD(agg_filter);
 	WRITE_BOOL_FIELD(agg_star);
 	WRITE_BOOL_FIELD(agg_distinct);
 	WRITE_BOOL_FIELD(func_variadic);
@@ -2106,7 +2120,7 @@ _outLockingClause(StringInfo str, const LockingClause *node)
 	WRITE_NODE_TYPE("LOCKINGCLAUSE");
 
 	WRITE_NODE_FIELD(lockedRels);
-	WRITE_BOOL_FIELD(forUpdate);
+	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_BOOL_FIELD(noWait);
 }
 
@@ -2237,6 +2251,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(jointree);
 	WRITE_NODE_FIELD(targetList);
+	WRITE_NODE_FIELD(withCheckOptions);
 	WRITE_NODE_FIELD(returningList);
 	WRITE_NODE_FIELD(groupClause);
 	WRITE_NODE_FIELD(havingQual);
@@ -2248,6 +2263,16 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(setOperations);
 	WRITE_NODE_FIELD(constraintDeps);
+}
+
+static void
+_outWithCheckOption(StringInfo str, const WithCheckOption *node)
+{
+	WRITE_NODE_TYPE("WITHCHECKOPTION");
+
+	WRITE_STRING_FIELD(viewname);
+	WRITE_NODE_FIELD(qual);
+	WRITE_BOOL_FIELD(cascaded);
 }
 
 static void
@@ -2284,7 +2309,7 @@ _outRowMarkClause(StringInfo str, const RowMarkClause *node)
 	WRITE_NODE_TYPE("ROWMARKCLAUSE");
 
 	WRITE_UINT_FIELD(rti);
-	WRITE_BOOL_FIELD(forUpdate);
+	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_BOOL_FIELD(noWait);
 	WRITE_BOOL_FIELD(pushedDown);
 }
@@ -2360,6 +2385,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_NODE_FIELD(funccoltypes);
 			WRITE_NODE_FIELD(funccoltypmods);
 			WRITE_NODE_FIELD(funccolcollations);
+			WRITE_BOOL_FIELD(funcordinality);
 			break;
 		case RTE_VALUES:
 			WRITE_NODE_FIELD(values_lists);
@@ -2592,6 +2618,7 @@ _outRangeFunction(StringInfo str, const RangeFunction *node)
 {
 	WRITE_NODE_TYPE("RANGEFUNCTION");
 
+	WRITE_BOOL_FIELD(ordinality);
 	WRITE_BOOL_FIELD(lateral);
 	WRITE_NODE_FIELD(funccallnode);
 	WRITE_NODE_FIELD(alias);
@@ -3103,6 +3130,9 @@ _outNode(StringInfo str, const void *obj)
 				break;
 			case T_Query:
 				_outQuery(str, obj);
+				break;
+			case T_WithCheckOption:
+				_outWithCheckOption(str, obj);
 				break;
 			case T_SortGroupClause:
 				_outSortGroupClause(str, obj);

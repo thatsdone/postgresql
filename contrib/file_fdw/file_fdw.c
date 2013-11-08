@@ -3,7 +3,7 @@
  * file_fdw.c
  *		  foreign-data wrapper for server-side flat files.
  *
- * Copyright (c) 2010-2012, PostgreSQL Global Development Group
+ * Copyright (c) 2010-2013, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  contrib/file_fdw/file_fdw.c
@@ -140,8 +140,8 @@ static void fileGetOptions(Oid foreigntableid,
 			   char **filename, List **other_options);
 static List *get_file_fdw_attribute_options(Oid relid);
 static bool check_selective_binary_conversion(RelOptInfo *baserel,
-											  Oid foreigntableid,
-											  List **columns);
+								  Oid foreigntableid,
+								  List **columns);
 static void estimate_size(PlannerInfo *root, RelOptInfo *baserel,
 			  FileFdwPlanState *fdw_private);
 static void estimate_costs(PlannerInfo *root, RelOptInfo *baserel,
@@ -478,7 +478,7 @@ fileGetForeignPaths(PlannerInfo *root,
 				   &startup_cost, &total_cost);
 
 	/*
-	 * Create a ForeignPath node and add it as only possible path.  We use the
+	 * Create a ForeignPath node and add it as only possible path.	We use the
 	 * fdw_private list of the path to carry the convert_selectively option;
 	 * it will be propagated into the fdw_private list of the Plan node.
 	 */
@@ -588,6 +588,7 @@ fileBeginForeignScan(ForeignScanState *node, int eflags)
 	 */
 	cstate = BeginCopyFrom(node->ss.ss_currentRelation,
 						   filename,
+						   false,
 						   NIL,
 						   options);
 
@@ -614,13 +615,13 @@ fileIterateForeignScan(ForeignScanState *node)
 	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 	bool		found;
-	ErrorContextCallback errcontext;
+	ErrorContextCallback errcallback;
 
 	/* Set up callback to identify error line number. */
-	errcontext.callback = CopyFromErrorCallback;
-	errcontext.arg = (void *) festate->cstate;
-	errcontext.previous = error_context_stack;
-	error_context_stack = &errcontext;
+	errcallback.callback = CopyFromErrorCallback;
+	errcallback.arg = (void *) festate->cstate;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
 
 	/*
 	 * The protocol for loading a virtual tuple into a slot is first
@@ -642,7 +643,7 @@ fileIterateForeignScan(ForeignScanState *node)
 		ExecStoreVirtualTuple(slot);
 
 	/* Remove error callback. */
-	error_context_stack = errcontext.previous;
+	error_context_stack = errcallback.previous;
 
 	return slot;
 }
@@ -660,6 +661,7 @@ fileReScanForeignScan(ForeignScanState *node)
 
 	festate->cstate = BeginCopyFrom(node->ss.ss_currentRelation,
 									festate->filename,
+									false,
 									NIL,
 									festate->options);
 }
@@ -768,7 +770,7 @@ check_selective_binary_conversion(RelOptInfo *baserel,
 	/* Add all the attributes used by restriction clauses. */
 	foreach(lc, baserel->baserestrictinfo)
 	{
-		RestrictInfo   *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
 		pull_varattnos((Node *) rinfo->clause, baserel->relid,
 					   &attrs_used);
@@ -976,7 +978,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	char	   *filename;
 	List	   *options;
 	CopyState	cstate;
-	ErrorContextCallback errcontext;
+	ErrorContextCallback errcallback;
 	MemoryContext oldcontext = CurrentMemoryContext;
 	MemoryContext tupcontext;
 
@@ -993,7 +995,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	/*
 	 * Create CopyState from FDW options.
 	 */
-	cstate = BeginCopyFrom(onerel, filename, NIL, options);
+	cstate = BeginCopyFrom(onerel, filename, false, NIL, options);
 
 	/*
 	 * Use per-tuple memory context to prevent leak of memory used to read
@@ -1009,10 +1011,10 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	rstate = anl_init_selection_state(targrows);
 
 	/* Set up callback to identify error line number. */
-	errcontext.callback = CopyFromErrorCallback;
-	errcontext.arg = (void *) cstate;
-	errcontext.previous = error_context_stack;
-	error_context_stack = &errcontext;
+	errcallback.callback = CopyFromErrorCallback;
+	errcallback.arg = (void *) cstate;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
 
 	*totalrows = 0;
 	*totaldeadrows = 0;
@@ -1072,7 +1074,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	}
 
 	/* Remove error callback. */
-	error_context_stack = errcontext.previous;
+	error_context_stack = errcallback.previous;
 
 	/* Clean up. */
 	MemoryContextDelete(tupcontext);

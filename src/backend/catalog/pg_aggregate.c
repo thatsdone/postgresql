@@ -3,7 +3,7 @@
  * pg_aggregate.c
  *	  routines to support manipulation of the pg_aggregate relation
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -42,11 +42,15 @@ static Oid lookup_agg_function(List *fnName, int nargs, Oid *input_types,
 /*
  * AggregateCreate
  */
-void
+Oid
 AggregateCreate(const char *aggName,
 				Oid aggNamespace,
-				Oid *aggArgTypes,
 				int numArgs,
+				oidvector *parameterTypes,
+				Datum allParameterTypes,
+				Datum parameterModes,
+				Datum parameterNames,
+				List *parameterDefaults,
 				List *aggtransfnName,
 				List *aggfinalfnName,
 				List *aggsortopName,
@@ -61,6 +65,7 @@ AggregateCreate(const char *aggName,
 	Oid			transfn;
 	Oid			finalfn = InvalidOid;	/* can be omitted */
 	Oid			sortop = InvalidOid;	/* can be omitted */
+	Oid		   *aggArgTypes = parameterTypes->values;
 	bool		hasPolyArg;
 	bool		hasInternalArg;
 	Oid			rettype;
@@ -244,12 +249,11 @@ AggregateCreate(const char *aggName,
 							  false,	/* isStrict (not needed for agg) */
 							  PROVOLATILE_IMMUTABLE,	/* volatility (not
 														 * needed for agg) */
-							  buildoidvector(aggArgTypes,
-											 numArgs),	/* paramTypes */
-							  PointerGetDatum(NULL),	/* allParamTypes */
-							  PointerGetDatum(NULL),	/* parameterModes */
-							  PointerGetDatum(NULL),	/* parameterNames */
-							  NIL,		/* parameterDefaults */
+							  parameterTypes,	/* paramTypes */
+							  allParameterTypes,		/* allParamTypes */
+							  parameterModes,	/* parameterModes */
+							  parameterNames,	/* parameterNames */
+							  parameterDefaults,		/* parameterDefaults */
 							  PointerGetDatum(NULL),	/* proconfig */
 							  1,	/* procost */
 							  0);		/* prorows */
@@ -316,6 +320,8 @@ AggregateCreate(const char *aggName,
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
+
+	return procOid;
 }
 
 /*
@@ -330,6 +336,7 @@ lookup_agg_function(List *fnName,
 	Oid			fnOid;
 	bool		retset;
 	int			nvargs;
+	Oid			vatype;
 	Oid		   *true_oid_array;
 	FuncDetailCode fdresult;
 	AclResult	aclresult;
@@ -344,7 +351,8 @@ lookup_agg_function(List *fnName,
 	 */
 	fdresult = func_get_detail(fnName, NIL, NIL,
 							   nargs, input_types, false, false,
-							   &fnOid, rettype, &retset, &nvargs,
+							   &fnOid, rettype, &retset,
+							   &nvargs, &vatype,
 							   &true_oid_array, NULL);
 
 	/* only valid case is a normal function not returning a set */

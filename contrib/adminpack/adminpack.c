@@ -3,7 +3,7 @@
  * adminpack.c
  *
  *
- * Copyright (c) 2002-2012, PostgreSQL Global Development Group
+ * Copyright (c) 2002-2013, PostgreSQL Global Development Group
  *
  * Author: Andreas Pflug <pgadmin@pse-consulting.de>
  *
@@ -376,8 +376,7 @@ pg_logdir_ls(PG_FUNCTION_ARGS)
 		/* Seems the timestamp is OK; prepare and return tuple */
 
 		values[0] = timestampbuf;
-		values[1] = palloc(strlen(fctx->location) + strlen(de->d_name) + 2);
-		sprintf(values[1], "%s/%s", fctx->location, de->d_name);
+		values[1] = psprintf("%s/%s", fctx->location, de->d_name);
 
 		tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
 

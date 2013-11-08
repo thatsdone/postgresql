@@ -3,7 +3,7 @@
  * datetime.c
  *	  Support functions for date/time types.
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -822,11 +822,11 @@ DecodeDateTime(char **field, int *ftype, int nf,
 		switch (ftype[i])
 		{
 			case DTK_DATE:
-				/***
+				/*
 				 * Integral julian day with attached time zone?
 				 * All other forms with JD will be separated into
 				 * distinct fields, so we handle just this case here.
-				 ***/
+				 */
 				if (ptype == DTK_JULIAN)
 				{
 					char	   *cp;
@@ -852,7 +852,7 @@ DecodeDateTime(char **field, int *ftype, int nf,
 					ptype = 0;
 					break;
 				}
-				/***
+				/*
 				 * Already have a date? Then this might be a time zone name
 				 * with embedded punctuation (e.g. "America/New_York") or a
 				 * run-together time with trailing time zone (e.g. hhmmss-zz).
@@ -861,7 +861,7 @@ DecodeDateTime(char **field, int *ftype, int nf,
 				 * We consider it a time zone if we already have month & day.
 				 * This is to allow the form "mmm dd hhmmss tz year", which
 				 * we've historically accepted.
-				 ***/
+				 */
 				else if (ptype != 0 ||
 						 ((fmask & (DTK_M(MONTH) | DTK_M(DAY))) ==
 						  (DTK_M(MONTH) | DTK_M(DAY))))
@@ -945,6 +945,7 @@ DecodeDateTime(char **field, int *ftype, int nf,
 				break;
 
 			case DTK_TIME:
+
 				/*
 				 * This might be an ISO time following a "t" field.
 				 */
@@ -1160,7 +1161,17 @@ DecodeDateTime(char **field, int *ftype, int nf,
 						if (dterr < 0)
 							return dterr;
 					}
-					else if (flen > 4)
+					/*
+					 * Is this a YMD or HMS specification, or a year number?
+					 * YMD and HMS are required to be six digits or more, so
+					 * if it is 5 digits, it is a year.  If it is six or more
+					 * more digits, we assume it is YMD or HMS unless no date
+					 * and no time values have been specified.  This forces
+					 * 6+ digit years to be at the end of the string, or to use
+					 * the ISO date specification.
+					 */
+					else if (flen >= 6 && (!(fmask & DTK_DATE_M) ||
+							 !(fmask & DTK_TIME_M)))
 					{
 						dterr = DecodeNumberField(flen, field[i], fmask,
 												  &tmask, tm,
@@ -1558,8 +1569,8 @@ overflow:
  * Returns 0 if successful, DTERR code if bogus input detected.
  *
  * Note that support for time zone is here for
- * SQL92 TIME WITH TIME ZONE, but it reveals
- * bogosity with SQL92 date/time standards, since
+ * SQL TIME WITH TIME ZONE, but it reveals
+ * bogosity with SQL date/time standards, since
  * we must infer a time zone from current time.
  * - thomas 2000-03-10
  * Allow specifying date to get a better time zone,
@@ -2176,8 +2187,11 @@ DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
 	while (*str != '\0' && nf < MAXDATEFIELDS)
 	{
 		/* skip field separators */
-		while (!isalnum((unsigned char) *str))
+		while (*str != '\0' && !isalnum((unsigned char) *str))
 			str++;
+
+		if (*str == '\0')
+			return DTERR_BAD_FORMAT;	/* end of string after separator */
 
 		field[nf] = str;
 		if (isdigit((unsigned char) *str))
@@ -2643,29 +2657,20 @@ DecodeNumberField(int len, char *str, int fmask,
 	/* No decimal point and no complete date yet? */
 	else if ((fmask & DTK_DATE_M) != DTK_DATE_M)
 	{
-		/* yyyymmdd? */
-		if (len == 8)
+		if (len >= 6)
 		{
 			*tmask = DTK_DATE_M;
-
-			tm->tm_mday = atoi(str + 6);
-			*(str + 6) = '\0';
-			tm->tm_mon = atoi(str + 4);
-			*(str + 4) = '\0';
-			tm->tm_year = atoi(str + 0);
-
-			return DTK_DATE;
-		}
-		/* yymmdd? */
-		else if (len == 6)
-		{
-			*tmask = DTK_DATE_M;
-			tm->tm_mday = atoi(str + 4);
-			*(str + 4) = '\0';
-			tm->tm_mon = atoi(str + 2);
-			*(str + 2) = '\0';
-			tm->tm_year = atoi(str + 0);
-			*is2digits = TRUE;
+			/*
+			 * Start from end and consider first 2 as Day, next 2 as Month,
+			 * and the rest as Year.
+			 */
+			tm->tm_mday = atoi(str + (len - 2));
+			*(str + (len - 2)) = '\0';
+			tm->tm_mon = atoi(str + (len - 4));
+			*(str + (len - 4)) = '\0';
+			tm->tm_year = atoi(str);
+			if ((len - 4) == 2)
+				*is2digits = TRUE;
 
 			return DTK_DATE;
 		}
@@ -2682,7 +2687,7 @@ DecodeNumberField(int len, char *str, int fmask,
 			*(str + 4) = '\0';
 			tm->tm_min = atoi(str + 2);
 			*(str + 2) = '\0';
-			tm->tm_hour = atoi(str + 0);
+			tm->tm_hour = atoi(str);
 
 			return DTK_TIME;
 		}
@@ -2693,7 +2698,7 @@ DecodeNumberField(int len, char *str, int fmask,
 			tm->tm_sec = 0;
 			tm->tm_min = atoi(str + 2);
 			*(str + 2) = '\0';
-			tm->tm_hour = atoi(str + 0);
+			tm->tm_hour = atoi(str);
 
 			return DTK_TIME;
 		}
@@ -2891,7 +2896,7 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 				Assert(*field[i] == '-' || *field[i] == '+');
 
 				/*
-				 * Check for signed hh:mm or hh:mm:ss.  If so, process exactly
+				 * Check for signed hh:mm or hh:mm:ss.	If so, process exactly
 				 * like DTK_TIME case above, plus handling the sign.
 				 */
 				if (strchr(field[i] + 1, ':') != NULL &&

@@ -6,7 +6,7 @@
  * See src/backend/utils/misc/README for more information.
  *
  *
- * Copyright (c) 2000-2012, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2013, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * IDENTIFICATION
@@ -52,6 +52,7 @@
 #include "parser/scansup.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/bgworker.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
@@ -60,6 +61,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/dsm_impl.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/proc.h"
@@ -102,18 +104,9 @@
 #define MAX_KILOBYTES	(INT_MAX / 1024)
 #endif
 
-/*
- * Note: MAX_BACKENDS is limited to 2^23-1 because inval.c stores the
- * backend ID as a 3-byte signed integer.  Even if that limitation were
- * removed, we still could not exceed INT_MAX/4 because some places compute
- * 4*MaxBackends without any overflow check.  This is rechecked in
- * check_maxconnections, since MaxBackends is computed as MaxConnections
- * plus autovacuum_max_workers plus one (for the autovacuum launcher).
- */
-#define MAX_BACKENDS	0x7fffff
-
 #define KB_PER_MB (1024)
 #define KB_PER_GB (1024*1024)
+#define KB_PER_TB (1024*1024*1024)
 
 #define MS_PER_S 1000
 #define S_PER_MIN 60
@@ -131,8 +124,8 @@ extern int	CommitDelay;
 extern int	CommitSiblings;
 extern char *default_tablespace;
 extern char *temp_tablespaces;
+extern bool ignore_checksum_failure;
 extern bool synchronize_seqscans;
-extern int	ssl_renegotiation_limit;
 extern char *SSLCipherSuites;
 
 #ifdef TRACE_SORT
@@ -198,9 +191,8 @@ static const char *show_tcp_keepalives_idle(void);
 static const char *show_tcp_keepalives_interval(void);
 static const char *show_tcp_keepalives_count(void);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
-static void assign_maxconnections(int newval, void *extra);
+static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
-static void assign_autovacuum_max_workers(int newval, void *extra);
 static bool check_effective_io_concurrency(int *newval, void **extra, GucSource source);
 static void assign_effective_io_concurrency(int newval, void *extra);
 static void assign_pgstat_temp_directory(const char *newval, void *extra);
@@ -394,6 +386,7 @@ static const struct config_enum_entry synchronous_commit_options[] = {
  */
 extern const struct config_enum_entry wal_level_options[];
 extern const struct config_enum_entry sync_method_options[];
+extern const struct config_enum_entry dynamic_shared_memory_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -453,8 +446,6 @@ int			tcp_keepalives_count;
  * cases provide the value for SHOW to display.  The real state is elsewhere
  * and is kept in sync by assign_hooks.
  */
-static char *log_destination_string;
-
 static char *syslog_ident_str;
 static bool phony_autocommit;
 static bool session_auth_is_superuser;
@@ -477,6 +468,7 @@ static int	max_identifier_length;
 static int	block_size;
 static int	segment_size;
 static int	wal_block_size;
+static bool	data_checksums;
 static int	wal_segment_size;
 static bool integer_datetimes;
 static int	effective_io_concurrency;
@@ -512,6 +504,7 @@ const char *const GucSource_Names[] =
 	 /* PGC_S_ENV_VAR */ "environment variable",
 	 /* PGC_S_FILE */ "configuration file",
 	 /* PGC_S_ARGV */ "command line",
+	 /* PGC_S_GLOBAL */ "global",
 	 /* PGC_S_DATABASE */ "database",
 	 /* PGC_S_USER */ "user",
 	 /* PGC_S_DATABASE_USER */ "database user",
@@ -599,6 +592,8 @@ const char *const config_group_names[] =
 	gettext_noop("Client Connection Defaults / Statement Behavior"),
 	/* CLIENT_CONN_LOCALE */
 	gettext_noop("Client Connection Defaults / Locale and Formatting"),
+	/* CLIENT_CONN_PRELOAD */
+	gettext_noop("Client Connection Defaults / Shared Library Preloading"),
 	/* CLIENT_CONN_OTHER */
 	gettext_noop("Client Connection Defaults / Other Defaults"),
 	/* LOCK_MANAGEMENT */
@@ -819,6 +814,21 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"ignore_checksum_failure", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Continues processing after a checksum failure."),
+			gettext_noop("Detection of a checksum failure normally causes PostgreSQL to "
+				"report an error, aborting the current transaction. Setting "
+						 "ignore_checksum_failure to true causes the system to ignore the failure "
+			   "(but still report a warning), and continue processing. This "
+			  "behavior could cause crashes or other serious problems. Only "
+						 "has an effect if checksums are enabled."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&ignore_checksum_failure,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"zero_damaged_pages", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Continues processing past damaged page headers."),
 			gettext_noop("Detection of a damaged page header normally causes PostgreSQL to "
@@ -990,7 +1000,7 @@ static struct config_bool ConfigureNamesBool[] =
 #ifdef BTREE_BUILD_STATS
 	{
 		{"log_btree_build_stats", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Logs system resource usage statistics (memory and CPU) on various B-tree operations."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1064,7 +1074,7 @@ static struct config_bool ConfigureNamesBool[] =
 #ifdef LOCK_DEBUG
 	{
 		{"trace_locks", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Emits information about lock usage."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1074,7 +1084,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"trace_userlocks", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Emits information about user lock usage."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1084,7 +1094,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"trace_lwlocks", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Emits information about lightweight lock usage."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1094,7 +1104,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"debug_deadlocks", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Dumps information about all current locks when a deadlock timeout occurs."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1450,6 +1460,17 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether data checksums are turned on for this cluster"),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&data_checksums,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -1467,7 +1488,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_S
 		},
 		&XLogArchiveTimeout,
-		0, 0, INT_MAX,
+		0, 0, INT_MAX / 2,
 		NULL, NULL, NULL
 	},
 	{
@@ -1477,7 +1498,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_NOT_IN_SAMPLE | GUC_UNIT_S
 		},
 		&PostAuthDelay,
-		0, 0, INT_MAX,
+		0, 0, INT_MAX / 1000000,
 		NULL, NULL, NULL
 	},
 	{
@@ -1597,13 +1618,24 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"wal_receiver_timeout", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Sets the maximum wait time to receive data from the primary."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_receiver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"max_connections", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the maximum number of concurrent connections."),
 			NULL
 		},
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
-		check_maxconnections, assign_maxconnections, NULL
+		check_maxconnections, NULL, NULL
 	},
 
 	{
@@ -1830,8 +1862,8 @@ static struct config_int ConfigureNamesInt[] =
 #ifdef LOCK_DEBUG
 	{
 		{"trace_lock_oidmin", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
-			NULL,
+			gettext_noop("Sets the minimum OID of tables for tracking locks."),
+			gettext_noop("Is used to avoid output on system tables."),
 			GUC_NOT_IN_SAMPLE
 		},
 		&Trace_lock_oidmin,
@@ -1840,7 +1872,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 	{
 		{"trace_lock_table", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("No description available."),
+			gettext_noop("Sets the OID of the table with unconditionally lock tracing."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
@@ -1857,6 +1889,17 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MS
 		},
 		&StatementTimeout,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"lock_timeout", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the maximum allowed duration of any wait for a lock."),
+			gettext_noop("A value of 0 turns off the timeout."),
+			GUC_UNIT_MS
+		},
+		&LockTimeout,
 		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
@@ -2009,6 +2052,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"xloginsert_slots", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Sets the number of slots for concurrent xlog insertions."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&num_xloginsert_slots,
+		8, 1, 1000,
+		NULL, NULL, NULL
+	},
+
+	{
 		/* see max_connections */
 		{"max_wal_senders", PGC_POSTMASTER, REPLICATION_SENDING,
 			gettext_noop("Sets the maximum number of simultaneously running WAL sender processes."),
@@ -2020,18 +2074,18 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"replication_timeout", PGC_SIGHUP, REPLICATION_SENDING,
+		{"wal_sender_timeout", PGC_SIGHUP, REPLICATION_SENDING,
 			gettext_noop("Sets the maximum time to wait for WAL replication."),
 			NULL,
 			GUC_UNIT_MS
 		},
-		&replication_timeout,
+		&wal_sender_timeout,
 		60 * 1000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
 	{
-		{"commit_delay", PGC_USERSET, WAL_SETTINGS,
+		{"commit_delay", PGC_SUSET, WAL_SETTINGS,
 			gettext_noop("Sets the delay in microseconds between transaction commit and "
 						 "flushing WAL to disk."),
 			NULL
@@ -2131,13 +2185,25 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_worker_processes",
+			PGC_POSTMASTER,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum number of concurrent worker processes."),
+			NULL,
+		},
+		&max_worker_processes,
+		8, 1, MAX_BACKENDS,
+		check_max_worker_processes, NULL, NULL
+	},
+
+	{
 		{"log_rotation_age", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Automatic log file rotation will occur after N minutes."),
 			NULL,
 			GUC_UNIT_MIN
 		},
 		&Log_RotationAge,
-		HOURS_PER_DAY * MINS_PER_HOUR, 0, INT_MAX / MINS_PER_HOUR,
+		HOURS_PER_DAY * MINS_PER_HOUR, 0, INT_MAX / SECS_PER_MINUTE,
 		NULL, NULL, NULL
 	},
 
@@ -2278,7 +2344,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_max_workers,
 		3, 1, MAX_BACKENDS,
-		check_autovacuum_max_workers, assign_autovacuum_max_workers, NULL
+		check_autovacuum_max_workers, NULL, NULL
 	},
 
 	{
@@ -2346,8 +2412,8 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS,
 		},
 		&effective_cache_size,
-		DEFAULT_EFFECTIVE_CACHE_SIZE, 1, INT_MAX,
-		NULL, NULL, NULL
+		-1, -1, INT_MAX,
+		check_effective_cache_size, NULL, NULL
 	},
 
 	{
@@ -2718,7 +2784,18 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"shared_preload_libraries", PGC_POSTMASTER, RESOURCES_KERNEL,
+		{"session_preload_libraries", PGC_SUSET, CLIENT_CONN_PRELOAD,
+			gettext_noop("Lists shared libraries to preload into each backend."),
+			NULL,
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
+		},
+		&session_preload_libraries_string,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"shared_preload_libraries", PGC_POSTMASTER, CLIENT_CONN_PRELOAD,
 			gettext_noop("Lists shared libraries to preload into server."),
 			NULL,
 			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
@@ -2729,8 +2806,8 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"local_preload_libraries", PGC_BACKEND, CLIENT_CONN_OTHER,
-			gettext_noop("Lists shared libraries to preload into each backend."),
+		{"local_preload_libraries", PGC_BACKEND, CLIENT_CONN_PRELOAD,
+			gettext_noop("Lists unprivileged shared libraries to preload into each backend."),
 			NULL,
 			GUC_LIST_INPUT | GUC_LIST_QUOTE
 		},
@@ -2806,7 +2883,7 @@ static struct config_string ConfigureNamesString[] =
 						 "depending on the platform."),
 			GUC_LIST_INPUT
 		},
-		&log_destination_string,
+		&Log_destination_string,
 		"stderr",
 		check_log_destination, assign_log_destination, NULL
 	},
@@ -3057,7 +3134,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&SSLCipherSuites,
 #ifdef USE_SSL
-		"ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH",
+		"DEFAULT:!LOW:!EXP:!MD5:@STRENGTH",
 #else
 		"none",
 #endif
@@ -3270,6 +3347,16 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
+		{"dynamic_shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Selects the dynamic shared memory implementation used."),
+			NULL
+		},
+		&dynamic_shared_memory_type,
+		DEFAULT_DYNAMIC_SHARED_MEMORY_TYPE, dynamic_shared_memory_options,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"wal_sync_method", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Selects the method used for forcing WAL updates to disk."),
 			NULL
@@ -3368,6 +3455,9 @@ guc_malloc(int elevel, size_t size)
 {
 	void	   *data;
 
+	/* Avoid unportable behavior of malloc(0) */
+	if (size == 0)
+		size = 1;
 	data = malloc(size);
 	if (data == NULL)
 		ereport(elevel,
@@ -3381,6 +3471,9 @@ guc_realloc(int elevel, void *old, size_t size)
 {
 	void	   *data;
 
+	/* Avoid unportable behavior of realloc(NULL, 0) */
+	if (old == NULL && size == 0)
+		size = 1;
 	data = realloc(old, size);
 	if (data == NULL)
 		ereport(elevel,
@@ -4166,6 +4259,8 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 	 */
 	pg_timezone_abbrev_initialize();
 
+	set_default_effective_cache_size();
+	    
 	/*
 	 * Figure out where pg_hba.conf is, and make sure the path is absolute.
 	 */
@@ -4813,7 +4908,7 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 		{
 			/* Set hint for use if no match or trailing garbage */
 			if (hintmsg)
-				*hintmsg = gettext_noop("Valid units for this parameter are \"kB\", \"MB\", and \"GB\".");
+				*hintmsg = gettext_noop("Valid units for this parameter are \"kB\", \"MB\", \"GB\", and \"TB\".");
 
 #if BLCKSZ < 1024 || BLCKSZ > (1024*1024)
 #error BLCKSZ must be between 1KB and 1MB
@@ -4864,6 +4959,22 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 						break;
 					case GUC_UNIT_XBLOCKS:
 						val *= KB_PER_GB / (XLOG_BLCKSZ / 1024);
+						break;
+				}
+			}
+			else if (strncmp(endptr, "TB", 2) == 0)
+			{
+				endptr += 2;
+				switch (flags & GUC_UNIT_MEMORY)
+				{
+					case GUC_UNIT_KB:
+						val *= KB_PER_TB;
+						break;
+					case GUC_UNIT_BLOCKS:
+						val *= KB_PER_TB / (BLCKSZ / 1024);
+						break;
+					case GUC_UNIT_XBLOCKS:
+						val *= KB_PER_TB / (XLOG_BLCKSZ / 1024);
 						break;
 				}
 			}
@@ -5153,7 +5264,7 @@ set_config_option(const char *name, const char *value,
 			 */
 			elevel = IsUnderPostmaster ? DEBUG3 : LOG;
 		}
-		else if (source == PGC_S_DATABASE || source == PGC_S_USER ||
+		else if (source == PGC_S_GLOBAL || source == PGC_S_DATABASE || source == PGC_S_USER ||
 				 source == PGC_S_DATABASE_USER)
 			elevel = WARNING;
 		else
@@ -6164,7 +6275,7 @@ flatten_set_variable_args(const char *name, List *args)
  * SET command
  */
 void
-ExecSetVariableStmt(VariableSetStmt *stmt)
+ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 {
 	GucAction	action = stmt->is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET;
 
@@ -6172,6 +6283,8 @@ ExecSetVariableStmt(VariableSetStmt *stmt)
 	{
 		case VAR_SET_VALUE:
 		case VAR_SET_CURRENT:
+			if (stmt->is_local)
+				RequireTransactionChain(isTopLevel, "SET LOCAL");
 			(void) set_config_option(stmt->name,
 									 ExtractSetVariableArgs(stmt),
 									 (superuser() ? PGC_SUSET : PGC_USERSET),
@@ -6181,7 +6294,6 @@ ExecSetVariableStmt(VariableSetStmt *stmt)
 									 0);
 			break;
 		case VAR_SET_MULTI:
-
 			/*
 			 * Special-case SQL syntaxes.  The TRANSACTION and SESSION
 			 * CHARACTERISTICS cases effectively set more than one variable
@@ -6192,6 +6304,8 @@ ExecSetVariableStmt(VariableSetStmt *stmt)
 			if (strcmp(stmt->name, "TRANSACTION") == 0)
 			{
 				ListCell   *head;
+
+				RequireTransactionChain(isTopLevel, "SET TRANSACTION");
 
 				foreach(head, stmt->args)
 				{
@@ -6241,6 +6355,8 @@ ExecSetVariableStmt(VariableSetStmt *stmt)
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("SET LOCAL TRANSACTION SNAPSHOT is not implemented")));
+
+				RequireTransactionChain(isTopLevel, "SET TRANSACTION");
 				Assert(IsA(con, A_Const));
 				Assert(nodeTag(&con->val) == T_String);
 				ImportSnapshot(strVal(&con->val));
@@ -6250,7 +6366,13 @@ ExecSetVariableStmt(VariableSetStmt *stmt)
 					 stmt->name);
 			break;
 		case VAR_SET_DEFAULT:
+			if (stmt->is_local)
+				RequireTransactionChain(isTopLevel, "SET LOCAL");
+			/* fall through */
 		case VAR_RESET:
+			if (strcmp(stmt->name, "transaction_isolation") == 0)
+				RequireTransactionChain(isTopLevel, "RESET TRANSACTION");
+
 			(void) set_config_option(stmt->name,
 									 NULL,
 									 (superuser() ? PGC_SUSET : PGC_USERSET),
@@ -7360,7 +7482,12 @@ _ShowOption(struct config_generic * record, bool use_units)
 								break;
 						}
 
-						if (result % KB_PER_GB == 0)
+						if (result % KB_PER_TB == 0)
+						{
+							result /= KB_PER_TB;
+							unit = "TB";
+						}
+						else if (result % KB_PER_GB == 0)
 						{
 							result /= KB_PER_GB;
 							unit = "GB";
@@ -7821,8 +7948,7 @@ GUCArrayAdd(ArrayType *array, const char *name, const char *value)
 		name = record->name;
 
 	/* build new item for array */
-	newval = palloc(strlen(name) + 1 + strlen(value) + 1);
-	sprintf(newval, "%s=%s", name, value);
+	newval = psprintf("%s=%s", name, value);
 	datum = CStringGetTextDatum(newval);
 
 	if (array)
@@ -8621,29 +8747,26 @@ show_tcp_keepalives_count(void)
 static bool
 check_maxconnections(int *newval, void **extra, GucSource source)
 {
-	if (*newval + autovacuum_max_workers + 1 > MAX_BACKENDS)
+	if (*newval + autovacuum_max_workers + 1 +
+		max_worker_processes > MAX_BACKENDS)
 		return false;
 	return true;
-}
-
-static void
-assign_maxconnections(int newval, void *extra)
-{
-	MaxBackends = newval + autovacuum_max_workers + 1;
 }
 
 static bool
 check_autovacuum_max_workers(int *newval, void **extra, GucSource source)
 {
-	if (MaxConnections + *newval + 1 > MAX_BACKENDS)
+	if (MaxConnections + *newval + 1 + max_worker_processes > MAX_BACKENDS)
 		return false;
 	return true;
 }
 
-static void
-assign_autovacuum_max_workers(int newval, void *extra)
+static bool
+check_max_worker_processes(int *newval, void **extra, GucSource source)
 {
-	MaxBackends = MaxConnections + newval + 1;
+	if (MaxConnections + autovacuum_max_workers + 1 + *newval > MAX_BACKENDS)
+		return false;
+	return true;
 }
 
 static bool
@@ -8718,14 +8841,23 @@ static void
 assign_pgstat_temp_directory(const char *newval, void *extra)
 {
 	/* check_canonical_path already canonicalized newval for us */
+	char	   *dname;
 	char	   *tname;
 	char	   *fname;
 
-	tname = guc_malloc(ERROR, strlen(newval) + 12);		/* /pgstat.tmp */
-	sprintf(tname, "%s/pgstat.tmp", newval);
-	fname = guc_malloc(ERROR, strlen(newval) + 13);		/* /pgstat.stat */
-	sprintf(fname, "%s/pgstat.stat", newval);
+	/* directory */
+	dname = guc_malloc(ERROR, strlen(newval) + 1);		/* runtime dir */
+	sprintf(dname, "%s", newval);
 
+	/* global stats */
+	tname = guc_malloc(ERROR, strlen(newval) + 12);		/* /global.tmp */
+	sprintf(tname, "%s/global.tmp", newval);
+	fname = guc_malloc(ERROR, strlen(newval) + 13);		/* /global.stat */
+	sprintf(fname, "%s/global.stat", newval);
+
+	if (pgstat_stat_directory)
+		free(pgstat_stat_directory);
+	pgstat_stat_directory = dname;
 	if (pgstat_stat_tmpname)
 		free(pgstat_stat_tmpname);
 	pgstat_stat_tmpname = tname;

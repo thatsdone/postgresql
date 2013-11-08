@@ -57,7 +57,7 @@
  * values.
  *
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -68,6 +68,9 @@
 
 #include "postgres.h"
 
+#ifdef _MSC_VER
+#include <float.h>				/* for _isnan */
+#endif
 #include <math.h>
 
 #include "access/htup_details.h"
@@ -84,6 +87,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
+#include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 #include "utils/spccache.h"
@@ -92,14 +96,13 @@
 
 #define LOG2(x)  (log(x) / 0.693147180559945)
 
-
 double		seq_page_cost = DEFAULT_SEQ_PAGE_COST;
 double		random_page_cost = DEFAULT_RANDOM_PAGE_COST;
 double		cpu_tuple_cost = DEFAULT_CPU_TUPLE_COST;
 double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
 
-int			effective_cache_size = DEFAULT_EFFECTIVE_CACHE_SIZE;
+int			effective_cache_size = -1;
 
 Cost		disable_cost = 1.0e10;
 
@@ -451,6 +454,52 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count)
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = startup_cost + run_cost;
+}
+
+void
+set_default_effective_cache_size(void)
+{
+	/*
+	 * If the value of effective_cache_size is -1, use the preferred
+	 * auto-tune value.
+	 */
+	if (effective_cache_size == -1)
+	{
+		char		buf[32];
+
+		snprintf(buf, sizeof(buf), "%d", NBuffers * DEFAULT_EFFECTIVE_CACHE_SIZE_MULTI);
+		SetConfigOption("effective_cache_size", buf, PGC_POSTMASTER, PGC_S_OVERRIDE);
+	}
+	Assert(effective_cache_size > 0);
+}
+
+/*
+ * GUC check_hook for effective_cache_size
+ */
+bool
+check_effective_cache_size(int *newval, void **extra, GucSource source)
+{
+	/*
+	 * -1 indicates a request for auto-tune.
+	 */
+	if (*newval == -1)
+	{
+		/*
+		 * If we haven't yet changed the boot_val default of -1, just let it
+		 * be.	We'll fix it later.
+		 */
+		if (effective_cache_size == -1)
+			return true;
+
+		/* Otherwise, substitute the auto-tune value */
+		*newval = NBuffers * DEFAULT_EFFECTIVE_CACHE_SIZE_MULTI;
+	}
+
+	/* set minimum? */
+	if (*newval < 1)
+		*newval = 1;
+
+	return true;
 }
 
 /*
@@ -1584,6 +1633,14 @@ cost_windowagg(Path *path, PlannerInfo *root,
 
 		/* also add the input expressions' cost to per-input-row costs */
 		cost_qual_eval_node(&argcosts, (Node *) wfunc->args, root);
+		startup_cost += argcosts.startup;
+		wfunccost += argcosts.per_tuple;
+
+		/*
+		 * Add the filter's cost to per-input-row costs.  XXX We should reduce
+		 * input expression costs according to filter selectivity.
+		 */
+		cost_qual_eval_node(&argcosts, (Node *) wfunc->aggfilter, root);
 		startup_cost += argcosts.startup;
 		wfunccost += argcosts.per_tuple;
 
@@ -3739,6 +3796,15 @@ set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 			continue;
 
 		/*
+		 * The subquery could be an expansion of a view that's had columns
+		 * added to it since the current query was parsed, so that there are
+		 * non-junk tlist columns in it that don't correspond to any column
+		 * visible at our query level.	Ignore such columns.
+		 */
+		if (te->resno < rel->min_attr || te->resno > rel->max_attr)
+			continue;
+
+		/*
 		 * XXX This currently doesn't work for subqueries containing set
 		 * operations, because the Vars in their tlists are bogus references
 		 * to the first leaf subquery, which wouldn't give the right answer
@@ -3759,7 +3825,6 @@ set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 
 			item_width = subrel->attr_widths[var->varattno - subrel->min_attr];
 		}
-		Assert(te->resno >= rel->min_attr && te->resno <= rel->max_attr);
 		rel->attr_widths[te->resno - rel->min_attr] = item_width;
 	}
 
@@ -3924,10 +3989,9 @@ set_rel_width(PlannerInfo *root, RelOptInfo *rel)
 
 		/*
 		 * Ordinarily, a Var in a rel's reltargetlist must belong to that rel;
-		 * but there are corner cases involving LATERAL references in
-		 * appendrel members where that isn't so (see set_append_rel_size()).
-		 * If the Var has the wrong varno, fall through to the generic case
-		 * (it doesn't seem worth the trouble to be any smarter).
+		 * but there are corner cases involving LATERAL references where that
+		 * isn't so.  If the Var has the wrong varno, fall through to the
+		 * generic case (it doesn't seem worth the trouble to be any smarter).
 		 */
 		if (IsA(node, Var) &&
 			((Var *) node)->varno == rel->relid)

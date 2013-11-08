@@ -3,7 +3,7 @@
  * parse_node.c
  *	  various routines that make nodes for querytrees
  *
- * Portions Copyright (c) 1996-2012, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -145,10 +145,10 @@ setup_parser_errposition_callback(ParseCallbackState *pcbstate,
 	/* Setup error traceback support for ereport() */
 	pcbstate->pstate = pstate;
 	pcbstate->location = location;
-	pcbstate->errcontext.callback = pcb_error_callback;
-	pcbstate->errcontext.arg = (void *) pcbstate;
-	pcbstate->errcontext.previous = error_context_stack;
-	error_context_stack = &pcbstate->errcontext;
+	pcbstate->errcallback.callback = pcb_error_callback;
+	pcbstate->errcallback.arg = (void *) pcbstate;
+	pcbstate->errcallback.previous = error_context_stack;
+	error_context_stack = &pcbstate->errcallback;
 }
 
 /*
@@ -158,7 +158,7 @@ void
 cancel_parser_errposition_callback(ParseCallbackState *pcbstate)
 {
 	/* Pop the error context stack */
-	error_context_stack = pcbstate->errcontext.previous;
+	error_context_stack = pcbstate->errcallback.previous;
 }
 
 /*
